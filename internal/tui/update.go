@@ -27,11 +27,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForPollResult(m.pollCh)
 
 	case MarkAsReadSuccessMsg:
-		// Update the notification to mark it as read locally
-		if notif, ok := m.allNotifications[msg.ThreadID]; ok {
-			notif.Unread = false
-			m.updateNotifications(nil)
-		}
+		// Remove the notification from the list
+		delete(m.allNotifications, msg.ThreadID)
+		m.updateNotifications(nil)
 		return m, nil
 
 	case MarkAsReadErrorMsg:
