@@ -59,10 +59,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Route keys to theme selector when it's open
+		if m.showThemeSelector {
+			switch msg.String() {
+			case "esc", "q":
+				m.showThemeSelector = false
+				return m, nil
+			case "enter":
+				if item, ok := m.themeList.SelectedItem().(ThemeItem); ok {
+					m.applyTheme(item.key)
+				}
+				m.showThemeSelector = false
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.themeList, cmd = m.themeList.Update(msg)
+				return m, cmd
+			}
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.cancel()
 			return m, tea.Quit
+
+		case "t":
+			m.showThemeSelector = true
+			return m, nil
 
 		case "tab":
 			if m.focusedPane == LeftPane {

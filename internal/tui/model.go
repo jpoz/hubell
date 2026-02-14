@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jpoz/hubell/internal/config"
 	"github.com/jpoz/hubell/internal/github"
 	"github.com/jpoz/hubell/internal/notify"
 )
@@ -151,25 +152,33 @@ type Model struct {
 	err              error
 	width            int
 	height           int
+
+	theme              Theme
+	showThemeSelector  bool
+	themeList          list.Model
 }
 
 // New creates a new TUI model
 func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollResult) *Model {
 	ctx, cancel := context.WithCancel(ctx)
 
-	// Initialize notification list with default delegate
-	delegate := list.NewDefaultDelegate()
+	theme := GetTheme(config.LoadTheme())
+
+	// Initialize notification list with themed delegate
+	delegate := newThemedDelegate(theme)
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = "Notifications"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
+	applyListTheme(&l, theme)
 
-	// Initialize PR list
-	prDelegate := list.NewDefaultDelegate()
+	// Initialize PR list with themed delegate
+	prDelegate := newThemedDelegate(theme)
 	pl := list.New([]list.Item{}, prDelegate, 0, 0)
 	pl.Title = "Open PRs"
 	pl.SetShowStatusBar(false)
 	pl.SetFilteringEnabled(true)
+	applyListTheme(&pl, theme)
 
 	return &Model{
 		list:             l,
@@ -185,6 +194,8 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 		filterMode:       FilterMyPRs,
 		focusedPane:      LeftPane,
 		loading:          true,
+		theme:            theme,
+		themeList:        buildThemeList(),
 	}
 }
 
