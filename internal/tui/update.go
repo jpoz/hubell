@@ -2,10 +2,12 @@ package tui
 
 import (
 	"context"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jpoz/hubell/internal/browser"
 	"github.com/jpoz/hubell/internal/github"
+	"github.com/jpoz/hubell/internal/notify"
 )
 
 // Update implements tea.Model
@@ -14,13 +16,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.list.SetSize(msg.Width, msg.Height-5) // Leave room for help text
 		return m, nil
 
-	case NotificationsMsg:
+	case PollResultMsg:
+		m.loading = false
 		m.err = nil
+		if msg.PRStatuses != nil {
+			m.prStatuses = msg.PRStatuses
+		}
+		if msg.PRInfos != nil {
+			m.prInfos = msg.PRInfos
+		}
+		for _, change := range msg.PRChanges {
+			notify.SendDesktopNotification(
+				fmt.Sprintf("CI %s: %s/%s", change.NewStatus, change.Owner, change.Repo),
+				fmt.Sprintf("PR #%d: %s (%s → %s)", change.Number, change.Title, change.OldStatus, change.NewStatus),
+			)
+		}
 		m.updateNotifications(msg.Notifications)
+		m.updatePRList()
 		return m, waitForPollResult(m.pollCh)
+
+	case BannerTickMsg:
+		if m.loading {
+			m.bannerFrame++
+			return m, bannerTick()
+		}
+		return m, nil
 
 	case ErrorMsg:
 		m.err = msg.Err
@@ -42,34 +64,55 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			return m, tea.Quit
 
+		case "tab":
+			if m.focusedPane == LeftPane {
+				m.focusedPane = RightPane
+			} else {
+				m.focusedPane = LeftPane
+			}
+			return m, nil
+
 		case "enter":
-			// Open notification in browser
-			if selectedItem, ok := m.list.SelectedItem().(NotificationItem); ok {
-				webURL := github.ConvertAPIURLToWeb(selectedItem.notification.Subject.URL)
-				if err := browser.Open(webURL); err != nil {
-					m.err = err
+			if m.focusedPane == LeftPane {
+				if selectedItem, ok := m.list.SelectedItem().(NotificationItem); ok {
+					webURL := github.ConvertAPIURLToWeb(selectedItem.notification.Subject.URL)
+					if err := browser.Open(webURL); err != nil {
+						m.err = err
+					}
+				}
+			} else {
+				if selectedItem, ok := m.prList.SelectedItem().(PRItem); ok {
+					if err := browser.Open(selectedItem.info.URL); err != nil {
+						m.err = err
+					}
 				}
 			}
 			return m, nil
 
 		case "r", "m":
-			// Mark selected notification as read
-			if selectedItem, ok := m.list.SelectedItem().(NotificationItem); ok {
-				return m, markAsRead(m.ctx, m.githubClient, selectedItem.notification.ID)
+			if m.focusedPane == LeftPane {
+				if selectedItem, ok := m.list.SelectedItem().(NotificationItem); ok {
+					return m, markAsRead(m.ctx, m.githubClient, selectedItem.notification.ID)
+				}
 			}
 			return m, nil
 
 		case "f":
-			// Cycle through filter modes
-			m.filterMode = (m.filterMode + 1) % 2
-			m.updateNotifications(nil)
+			if m.focusedPane == LeftPane {
+				m.filterMode = (m.filterMode + 1) % 2
+				m.updateNotifications(nil)
+			}
 			return m, nil
 		}
 	}
 
-	// Pass to list for navigation
+	// Pass to the focused list for navigation
 	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
+	if m.focusedPane == LeftPane {
+		m.list, cmd = m.list.Update(msg)
+	} else {
+		m.prList, cmd = m.prList.Update(msg)
+	}
 	return m, cmd
 }
 

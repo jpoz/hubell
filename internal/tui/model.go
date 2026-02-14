@@ -2,8 +2,11 @@ package tui
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -12,9 +15,13 @@ import (
 	"github.com/jpoz/hubell/internal/notify"
 )
 
+//go:embed banner.txt
+var bannerText string
+
 // NotificationItem implements list.Item for the bubbles list
 type NotificationItem struct {
 	notification *github.Notification
+	ciStatus     github.PRStatus
 }
 
 // FilterValue implements list.Item
@@ -28,10 +35,22 @@ func (i NotificationItem) Title() string {
 	if i.notification.Unread {
 		unreadIndicator = "•"
 	}
-	return fmt.Sprintf("%s [%s] %s",
+
+	ciIndicator := ""
+	switch i.ciStatus {
+	case github.PRStatusSuccess:
+		ciIndicator = " [OK]"
+	case github.PRStatusFailure:
+		ciIndicator = " [FAIL]"
+	case github.PRStatusPending:
+		ciIndicator = " [...]"
+	}
+
+	return fmt.Sprintf("%s [%s] %s%s",
 		unreadIndicator,
 		i.notification.Repository.FullName,
-		i.notification.Subject.Title)
+		i.notification.Subject.Title,
+		ciIndicator)
 }
 
 // Description implements list.DefaultItem
@@ -40,6 +59,55 @@ func (i NotificationItem) Description() string {
 	timeStr := formatDuration(elapsed)
 	return fmt.Sprintf("%s | Updated: %s", i.notification.Reason, timeStr)
 }
+
+// PRItem implements list.Item for the PR list pane
+type PRItem struct {
+	info   github.PRInfo
+	status github.PRStatus
+}
+
+// FilterValue implements list.Item
+func (i PRItem) FilterValue() string {
+	return i.info.Title
+}
+
+// Title implements list.DefaultItem
+func (i PRItem) Title() string {
+	statusIndicator := ""
+	switch i.status {
+	case github.PRStatusSuccess:
+		statusIndicator = " [OK]"
+	case github.PRStatusFailure:
+		statusIndicator = " [FAIL]"
+	case github.PRStatusPending:
+		statusIndicator = " [...]"
+	}
+
+	reviewIndicator := ""
+	switch i.info.ReviewState {
+	case github.PRReviewApproved:
+		reviewIndicator = " [Approved]"
+	case github.PRReviewChangesRequested:
+		reviewIndicator = " [Changes Requested]"
+	case github.PRReviewReviewed:
+		reviewIndicator = " [Reviewed]"
+	}
+
+	return fmt.Sprintf("%s/%s#%d%s%s", i.info.Owner, i.info.Repo, i.info.Number, statusIndicator, reviewIndicator)
+}
+
+// Description implements list.DefaultItem
+func (i PRItem) Description() string {
+	return i.info.Title
+}
+
+// Pane identifies which pane has keyboard focus
+type Pane int
+
+const (
+	LeftPane Pane = iota
+	RightPane
+)
 
 // FilterMode controls which notifications are displayed
 type FilterMode int
@@ -64,41 +132,59 @@ func (f FilterMode) String() string {
 
 // Model is the main bubbletea model
 type Model struct {
-	list            list.Model
-	githubClient    *github.Client
-	pollCh          <-chan github.PollResult
-	ctx             context.Context
-	cancel          context.CancelFunc
-	notifications   []*github.Notification
+	list             list.Model
+	prList           list.Model
+	githubClient     *github.Client
+	pollCh           <-chan github.PollResult
+	ctx              context.Context
+	cancel           context.CancelFunc
+	notifications    []*github.Notification
 	allNotifications map[string]*github.Notification
-	notificationMap map[string]*github.Notification
-	lastNotifyCount int
-	filterMode      FilterMode
-	err             error
-	width           int
-	height          int
+	notificationMap  map[string]*github.Notification
+	prStatuses       map[string]github.PRStatus
+	prInfos          map[string]github.PRInfo
+	lastNotifyCount  int
+	filterMode       FilterMode
+	focusedPane      Pane
+	loading          bool
+	bannerFrame      int
+	err              error
+	width            int
+	height           int
 }
 
 // New creates a new TUI model
 func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollResult) *Model {
 	ctx, cancel := context.WithCancel(ctx)
 
-	// Initialize list with default delegate
+	// Initialize notification list with default delegate
 	delegate := list.NewDefaultDelegate()
 	l := list.New([]list.Item{}, delegate, 0, 0)
-	l.Title = "GitHub Notifications"
+	l.Title = "Notifications"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
 
+	// Initialize PR list
+	prDelegate := list.NewDefaultDelegate()
+	pl := list.New([]list.Item{}, prDelegate, 0, 0)
+	pl.Title = "Open PRs"
+	pl.SetShowStatusBar(false)
+	pl.SetFilteringEnabled(true)
+
 	return &Model{
 		list:             l,
+		prList:           pl,
 		githubClient:     client,
 		pollCh:           pollCh,
 		ctx:              ctx,
 		cancel:           cancel,
 		allNotifications: make(map[string]*github.Notification),
 		notificationMap:  make(map[string]*github.Notification),
+		prStatuses:       make(map[string]github.PRStatus),
+		prInfos:          make(map[string]github.PRInfo),
 		filterMode:       FilterMyPRs,
+		focusedPane:      LeftPane,
+		loading:          true,
 	}
 }
 
@@ -107,21 +193,36 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		waitForPollResult(m.pollCh),
 		tea.EnterAltScreen,
+		bannerTick(),
 	)
+}
+
+// bannerTick returns a command that sends a BannerTickMsg after a short delay
+func bannerTick() tea.Cmd {
+	return tea.Tick(time.Millisecond*50, func(t time.Time) tea.Msg {
+		return BannerTickMsg{}
+	})
 }
 
 // waitForPollResult waits for the next poll result
 func waitForPollResult(pollCh <-chan github.PollResult) tea.Cmd {
 	return func() tea.Msg {
-		result := <-pollCh
+		result, ok := <-pollCh
+		if !ok {
+			return nil
+		}
 		if result.Error != nil {
 			return ErrorMsg{Err: result.Error}
 		}
-		if result.Notifications != nil {
-			return NotificationsMsg{Notifications: result.Notifications}
+		if result.Notifications == nil && result.PRStatuses == nil {
+			return waitForPollResult(pollCh)()
 		}
-		// 304 Not Modified - wait for next poll
-		return waitForPollResult(pollCh)()
+		return PollResultMsg{
+			Notifications: result.Notifications,
+			PRStatuses:    result.PRStatuses,
+			PRInfos:       result.PRInfos,
+			PRChanges:     result.PRChanges,
+		}
 	}
 }
 
@@ -179,10 +280,13 @@ func (m *Model) updateNotifications(incoming []*github.Notification) {
 		m.notificationMap[n.ID] = n
 	}
 
-	// Convert to list items
+	// Convert to list items with CI status
 	items := make([]list.Item, len(m.notifications))
 	for i, n := range m.notifications {
-		items[i] = NotificationItem{notification: n}
+		items[i] = NotificationItem{
+			notification: n,
+			ciStatus:     m.prStatusForNotification(n),
+		}
 	}
 	m.list.SetItems(items)
 
@@ -202,6 +306,51 @@ func (m *Model) updateNotifications(incoming []*github.Notification) {
 		)
 	}
 	m.lastNotifyCount = unreadCount
+}
+
+// updatePRList rebuilds the right-pane PR list from current prInfos and prStatuses
+func (m *Model) updatePRList() {
+	// Collect and sort keys for stable ordering
+	keys := make([]string, 0, len(m.prInfos))
+	for k := range m.prInfos {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	items := make([]list.Item, 0, len(keys))
+	for _, key := range keys {
+		items = append(items, PRItem{
+			info:   m.prInfos[key],
+			status: m.prStatuses[key],
+		})
+	}
+	m.prList.SetItems(items)
+}
+
+// prAPIURLPattern matches GitHub API PR URLs like
+// https://api.github.com/repos/{owner}/{repo}/pulls/{number}
+var prAPIURLPattern = regexp.MustCompile(`/repos/([^/]+)/([^/]+)/pulls/(\d+)$`)
+
+// prStatusForNotification looks up the CI status for a notification's PR
+func (m *Model) prStatusForNotification(n *github.Notification) github.PRStatus {
+	if n.Subject.Type != "PullRequest" || n.Subject.URL == "" {
+		return ""
+	}
+
+	matches := prAPIURLPattern.FindStringSubmatch(n.Subject.URL)
+	if matches == nil {
+		return ""
+	}
+
+	owner := matches[1]
+	repo := matches[2]
+	number, err := strconv.Atoi(matches[3])
+	if err != nil {
+		return ""
+	}
+
+	key := github.PRKey(owner, repo, number)
+	return m.prStatuses[key]
 }
 
 // formatDuration formats a duration in a human-readable way

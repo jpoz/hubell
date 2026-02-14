@@ -63,8 +63,14 @@ func run() error {
 	// Create GitHub client
 	client := github.NewClient(token)
 
+	// Get authenticated user for PR status polling
+	user, err := client.GetAuthenticatedUser(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get authenticated user: %w", err)
+	}
+
 	// Create poller with 30-second interval
-	poller := github.NewPoller(client, 30*time.Second)
+	poller := github.NewPoller(client, 30*time.Second, user.Login)
 	pollCh := poller.Start(ctx)
 
 	// Send test notification on startup

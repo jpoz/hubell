@@ -2,43 +2,49 @@ package github
 
 import (
 	"context"
+	"maps"
 	"time"
 )
 
 // PollResult contains the result of a polling operation
 type PollResult struct {
 	Notifications []*Notification
+	PRStatuses    map[string]PRStatus
+	PRInfos       map[string]PRInfo
+	PRChanges     []PRStatusChange
 	Error         error
 }
 
-// Poller polls GitHub notifications at a regular interval
+// Poller polls GitHub notifications and open PR statuses at a regular interval
 type Poller struct {
-	client   *Client
-	interval time.Duration
+	client     *Client
+	interval   time.Duration
+	username   string
+	prStatuses map[string]PRStatus
+	prInfos    map[string]PRInfo
 }
 
-// NewPoller creates a new notification poller
-func NewPoller(client *Client, interval time.Duration) *Poller {
+// NewPoller creates a new poller
+func NewPoller(client *Client, interval time.Duration, username string) *Poller {
 	return &Poller{
-		client:   client,
-		interval: interval,
+		client:     client,
+		interval:   interval,
+		username:   username,
+		prStatuses: make(map[string]PRStatus),
+		prInfos:    make(map[string]PRInfo),
 	}
 }
 
 // Start begins polling and sends results on the returned channel
-// The polling will continue until the context is cancelled
 func (p *Poller) Start(ctx context.Context) <-chan PollResult {
 	resultCh := make(chan PollResult, 1)
 
 	go func() {
 		defer close(resultCh)
 
-		// Poll immediately on startup
-		notifications, err := p.client.ListNotifications(ctx)
-		resultCh <- PollResult{
-			Notifications: notifications,
-			Error:         err,
-		}
+		// Poll immediately on startup (first poll: no PR change notifications)
+		result := p.poll(ctx, true)
+		resultCh <- result
 
 		ticker := time.NewTicker(p.interval)
 		defer ticker.Stop()
@@ -48,17 +54,62 @@ func (p *Poller) Start(ctx context.Context) <-chan PollResult {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				notifications, err := p.client.ListNotifications(ctx)
-				// Only send if we have new notifications or an error
-				if notifications != nil || err != nil {
-					resultCh <- PollResult{
-						Notifications: notifications,
-						Error:         err,
-					}
-				}
+				result := p.poll(ctx, false)
+				resultCh <- result
 			}
 		}
 	}()
 
 	return resultCh
+}
+
+// poll performs a single poll cycle for both notifications and PR statuses
+func (p *Poller) poll(ctx context.Context, firstPoll bool) PollResult {
+	notifications, notifErr := p.client.ListNotifications(ctx)
+
+	prStatuses, prInfos, prErr := pollAllPRs(ctx, p.client, p.username)
+
+	// If both failed, return the notification error
+	if notifErr != nil && prErr != nil {
+		return PollResult{Error: notifErr}
+	}
+
+	var result PollResult
+	result.Notifications = notifications
+
+	if prStatuses != nil {
+		// Detect CI status changes (skip on first poll to establish baseline)
+		if !firstPoll {
+			for key, newStatus := range prStatuses {
+				oldStatus, exists := p.prStatuses[key]
+				if !exists {
+					oldStatus = PRStatusNone
+				}
+				if oldStatus != newStatus {
+					if info, ok := prInfos[key]; ok {
+						result.PRChanges = append(result.PRChanges, PRStatusChange{
+							Owner:     info.Owner,
+							Repo:      info.Repo,
+							Number:    info.Number,
+							Title:     info.Title,
+							URL:       info.URL,
+							OldStatus: oldStatus,
+							NewStatus: newStatus,
+						})
+					}
+				}
+			}
+		}
+
+		p.prStatuses = prStatuses
+		p.prInfos = prInfos
+
+		result.PRStatuses = make(map[string]PRStatus, len(prStatuses))
+		maps.Copy(result.PRStatuses, prStatuses)
+
+		result.PRInfos = make(map[string]PRInfo, len(prInfos))
+		maps.Copy(result.PRInfos, prInfos)
+	}
+
+	return result
 }

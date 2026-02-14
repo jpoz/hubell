@@ -4,9 +4,12 @@ import (
 	"github.com/jpoz/hubell/internal/github"
 )
 
-// NotificationsMsg is sent when new notifications are received
-type NotificationsMsg struct {
+// PollResultMsg is sent when new poll results are received
+type PollResultMsg struct {
 	Notifications []*github.Notification
+	PRStatuses    map[string]github.PRStatus
+	PRInfos       map[string]github.PRInfo
+	PRChanges     []github.PRStatusChange
 }
 
 // ErrorMsg is sent when an error occurs
@@ -28,3 +31,6 @@ type MarkAsReadSuccessMsg struct {
 type MarkAsReadErrorMsg struct {
 	Err error
 }
+
+// BannerTickMsg is sent on each animation frame for the loading banner pulse
+type BannerTickMsg struct{}
