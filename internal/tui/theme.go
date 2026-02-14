@@ -283,7 +283,7 @@ func (m *Model) applyTheme(name string) {
 	applyListTheme(&m.list, m.theme)
 
 	// Re-theme PR list
-	pd := newThemedDelegate(m.theme)
+	pd := newPRDelegate(m.theme)
 	m.prList.SetDelegate(pd)
 	applyListTheme(&m.prList, m.theme)
 
