@@ -42,12 +42,12 @@ type SearchResult struct {
 
 // SearchItem represents an item from the search API
 type SearchItem struct {
-	Number            int            `json:"number"`
-	Title             string         `json:"title"`
-	HTMLURL           string         `json:"html_url"`
-	CreatedAt         time.Time      `json:"created_at"`
-	PullRequestRef    PullRequestRef `json:"pull_request"`
-	RepositoryURL     string         `json:"repository_url"`
+	Number         int            `json:"number"`
+	Title          string         `json:"title"`
+	HTMLURL        string         `json:"html_url"`
+	CreatedAt      time.Time      `json:"created_at"`
+	PullRequestRef PullRequestRef `json:"pull_request"`
+	RepositoryURL  string         `json:"repository_url"`
 }
 
 // PullRequestRef contains pull request metadata from a search result

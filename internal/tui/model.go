@@ -133,9 +133,9 @@ type Model struct {
 	width            int
 	height           int
 
-	theme              Theme
-	showThemeSelector  bool
-	themeList          list.Model
+	theme             Theme
+	showThemeSelector bool
+	themeList         list.Model
 }
 
 // New creates a new TUI model
