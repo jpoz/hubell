@@ -42,6 +42,10 @@ func (m *Model) View() string {
 		return m.renderThemeSelector()
 	}
 
+	if m.showDashboard {
+		return m.renderDashboard()
+	}
+
 	if m.loading {
 		return m.renderBanner()
 	}
@@ -89,7 +93,7 @@ func (m *Model) View() string {
 	panes := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
 
 	// Help text
-	help := m.helpStyle().Render(fmt.Sprintf("tab: switch pane | enter: open | r: mark read | f: filter [%s] | t: theme | q: quit | /: search", m.filterMode))
+	help := m.helpStyle().Render(fmt.Sprintf("tab: switch pane | enter: open | r: mark read | f: filter [%s] | d: dashboard | t: theme | q: quit | /: search", m.filterMode))
 
 	return errorBanner + panes + "\n" + help
 }

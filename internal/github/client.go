@@ -255,6 +255,64 @@ func (c *Client) searchUserOpenPRs(ctx context.Context, username string) (*Searc
 	return &result, nil
 }
 
+// SearchMergedPRsThisWeek fetches PRs merged by the user since the start of the current week (Monday).
+func (c *Client) SearchMergedPRsThisWeek(ctx context.Context, username string) ([]MergedPRInfo, error) {
+	now := time.Now()
+	weekday := now.Weekday()
+	if weekday == time.Sunday {
+		weekday = 7
+	}
+	monday := now.AddDate(0, 0, -int(weekday-time.Monday))
+	mondayStr := monday.Format("2006-01-02")
+
+	q := fmt.Sprintf("author:%s+type:pr+is:merged+merged:>=%s", username, mondayStr)
+	u := fmt.Sprintf("%s/search/issues?q=%s&sort=updated&order=desc&per_page=30", baseURL, q)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search merged PRs: status %d", resp.StatusCode)
+	}
+
+	var result SearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode merged PR search: %w", err)
+	}
+
+	var merged []MergedPRInfo
+	for _, item := range result.Items {
+		owner, repo := parseRepoURL(item.RepositoryURL)
+		if owner == "" || repo == "" {
+			continue
+		}
+		mergedAt := time.Time{}
+		if item.ClosedAt != nil {
+			mergedAt = *item.ClosedAt
+		}
+		merged = append(merged, MergedPRInfo{
+			Owner:    owner,
+			Repo:     repo,
+			Number:   item.Number,
+			Title:    item.Title,
+			URL:      item.HTMLURL,
+			MergedAt: mergedAt,
+		})
+	}
+
+	return merged, nil
+}
+
 // GetPullRequest fetches a specific pull request
 func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", baseURL, owner, repo, number)

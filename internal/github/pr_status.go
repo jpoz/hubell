@@ -55,6 +55,7 @@ func pollAllPRs(ctx context.Context, client *Client, username string) (map[strin
 		reviews, err := client.GetPullRequestReviews(ctx, owner, repo, item.Number)
 		if err == nil {
 			info.ReviewState = computeReviewState(reviews)
+			info.Reviews = reviews
 		}
 		infos[key] = info
 	}

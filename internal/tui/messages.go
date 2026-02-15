@@ -10,6 +10,7 @@ type PollResultMsg struct {
 	PRStatuses    map[string]github.PRStatus
 	PRInfos       map[string]github.PRInfo
 	PRChanges     []github.PRStatusChange
+	MergedPRs     []github.MergedPRInfo
 }
 
 // ErrorMsg is sent when an error occurs

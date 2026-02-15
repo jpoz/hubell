@@ -12,6 +12,7 @@ type PollResult struct {
 	PRStatuses    map[string]PRStatus
 	PRInfos       map[string]PRInfo
 	PRChanges     []PRStatusChange
+	MergedPRs     []MergedPRInfo
 	Error         error
 }
 
@@ -69,6 +70,12 @@ func (p *Poller) poll(ctx context.Context, firstPoll bool) PollResult {
 
 	prStatuses, prInfos, prErr := pollAllPRs(ctx, p.client, p.username)
 
+	// Fetch merged PRs for dashboard (errors swallowed — informational only)
+	var mergedPRs []MergedPRInfo
+	if merged, err := p.client.SearchMergedPRsThisWeek(ctx, p.username); err == nil {
+		mergedPRs = merged
+	}
+
 	// If both failed, return the notification error
 	if notifErr != nil && prErr != nil {
 		return PollResult{Error: notifErr}
@@ -76,6 +83,7 @@ func (p *Poller) poll(ctx context.Context, firstPoll bool) PollResult {
 
 	var result PollResult
 	result.Notifications = notifications
+	result.MergedPRs = mergedPRs
 
 	if prStatuses != nil {
 		// Detect CI status changes (skip on first poll to establish baseline)

@@ -136,6 +136,9 @@ type Model struct {
 	theme             Theme
 	showThemeSelector bool
 	themeList         list.Model
+
+	showDashboard  bool
+	dashboardStats DashboardStats
 }
 
 // New creates a new TUI model
@@ -176,6 +179,7 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 		loading:          true,
 		theme:            theme,
 		themeList:        buildThemeList(),
+		dashboardStats:   newDashboardStats(),
 	}
 }
 
@@ -213,6 +217,7 @@ func waitForPollResult(pollCh <-chan github.PollResult) tea.Cmd {
 			PRStatuses:    result.PRStatuses,
 			PRInfos:       result.PRInfos,
 			PRChanges:     result.PRChanges,
+			MergedPRs:     result.MergedPRs,
 		}
 	}
 }
@@ -291,6 +296,7 @@ func (m *Model) updateNotifications(incoming []*github.Notification) {
 
 	if unreadCount > m.lastNotifyCount {
 		newCount := unreadCount - m.lastNotifyCount
+		m.dashboardStats.recordNotifications(newCount)
 		notify.SendDesktopNotification(
 			"GitHub Notifications",
 			fmt.Sprintf("You have %d new notification(s)", newCount),

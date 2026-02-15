@@ -46,6 +46,7 @@ type SearchItem struct {
 	Title          string         `json:"title"`
 	HTMLURL        string         `json:"html_url"`
 	CreatedAt      time.Time      `json:"created_at"`
+	ClosedAt       *time.Time     `json:"closed_at"`
 	PullRequestRef PullRequestRef `json:"pull_request"`
 	RepositoryURL  string         `json:"repository_url"`
 }
@@ -92,9 +93,20 @@ type PRInfo struct {
 	URL         string
 	CreatedAt   time.Time
 	ReviewState PRReviewState
+	Reviews     []Review
 	Additions   int
 	Deletions   int
 	CheckRuns   []CheckRun
+}
+
+// MergedPRInfo contains metadata about a merged pull request
+type MergedPRInfo struct {
+	Owner    string
+	Repo     string
+	Number   int
+	Title    string
+	URL      string
+	MergedAt time.Time
 }
 
 // PRReviewState represents the aggregate review approval state of a PR
@@ -109,9 +121,10 @@ const (
 
 // Review represents a single pull request review
 type Review struct {
-	ID    int    `json:"id"`
-	User  User   `json:"user"`
-	State string `json:"state"`
+	ID          int       `json:"id"`
+	User        User      `json:"user"`
+	State       string    `json:"state"`
+	SubmittedAt time.Time `json:"submitted_at"`
 }
 
 // PRStatus represents the aggregate CI status of a pull request

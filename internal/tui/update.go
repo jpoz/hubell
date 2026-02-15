@@ -33,6 +33,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				fmt.Sprintf("PR #%d: %s (%s → %s)", change.Number, change.Title, change.OldStatus, change.NewStatus),
 			)
 		}
+		m.dashboardStats.updateFromPollResult(msg.MergedPRs, msg.PRInfos)
 		m.updateNotifications(msg.Notifications)
 		m.updatePRList()
 		return m, waitForPollResult(m.pollCh)
@@ -59,6 +60,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Route keys to dashboard when it's open
+		if m.showDashboard {
+			switch msg.String() {
+			case "esc", "q", "d":
+				m.showDashboard = false
+				return m, nil
+			}
+			return m, nil
+		}
+
 		// Route keys to theme selector when it's open
 		if m.showThemeSelector {
 			switch msg.String() {
@@ -82,6 +93,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			m.cancel()
 			return m, tea.Quit
+
+		case "d":
+			m.showDashboard = true
+			return m, nil
 
 		case "t":
 			m.showThemeSelector = true
