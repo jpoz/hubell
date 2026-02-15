@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jpoz/hubell/internal/config"
 	"github.com/jpoz/hubell/internal/github"
 )
 
 // DashboardStats accumulates session-scoped metrics for the activity dashboard.
 type DashboardStats struct {
 	MergedPRs              []github.MergedPRInfo
+	WeeklyMergedCounts     map[string]int // keyed by ISO week (e.g. "2026-W07")
 	ReviewLatencies        map[string]time.Duration // keyed by PR key
 	ChecksTotal            int
 	ChecksSuccess          int
@@ -21,14 +23,32 @@ type DashboardStats struct {
 
 func newDashboardStats() DashboardStats {
 	return DashboardStats{
-		ReviewLatencies: make(map[string]time.Duration),
+		WeeklyMergedCounts: make(map[string]int),
+		ReviewLatencies:    make(map[string]time.Duration),
 	}
 }
 
 // updateFromPollResult refreshes dashboard data from the latest poll cycle.
-func (d *DashboardStats) updateFromPollResult(mergedPRs []github.MergedPRInfo, prInfos map[string]github.PRInfo) {
+func (d *DashboardStats) updateFromPollResult(mergedPRs []github.MergedPRInfo, weeklyMergedCounts map[string]int, prInfos map[string]github.PRInfo) {
+	// Merge backfill counts (first poll only)
+	if weeklyMergedCounts != nil {
+		for k, v := range weeklyMergedCounts {
+			d.WeeklyMergedCounts[k] = v
+		}
+	}
+
 	if mergedPRs != nil {
 		d.MergedPRs = mergedPRs
+
+		// Update current week count and persist
+		weekKey := config.WeekKey(time.Now())
+		d.WeeklyMergedCounts[weekKey] = len(mergedPRs)
+	}
+
+	// Persist updated counts
+	if weeklyMergedCounts != nil || mergedPRs != nil {
+		stats := config.WeeklyStats{Weeks: d.WeeklyMergedCounts}
+		_ = config.SaveWeeklyStats(stats)
 	}
 
 	// Recompute CI tallies from open PR check runs
@@ -115,6 +135,23 @@ func (d *DashboardStats) notificationBuckets() (lastHour, oneToThree, threeToSix
 	return
 }
 
+// buildWeeklyChartData returns bar chart data for the last numWeeks weeks.
+func (d *DashboardStats) buildWeeklyChartData(numWeeks int) []BarChartData {
+	now := time.Now()
+	data := make([]BarChartData, numWeeks)
+	for i := range numWeeks {
+		// Walk backwards: index 0 = oldest, last = current week
+		t := now.AddDate(0, 0, -(numWeeks-1-i)*7)
+		key := config.WeekKey(t)
+		_, week := t.ISOWeek()
+		data[i] = BarChartData{
+			Label: fmt.Sprintf("W%d", week),
+			Value: d.WeeklyMergedCounts[key],
+		}
+	}
+	return data
+}
+
 // renderDashboard draws the activity dashboard overlay.
 func (m *Model) renderDashboard() string {
 	d := &m.dashboardStats
@@ -135,42 +172,16 @@ func (m *Model) renderDashboard() string {
 	b.WriteString(titleStyle.Render("Activity Dashboard"))
 	b.WriteString("\n\n")
 
-	// Merged PRs section
-	b.WriteString(accentStyle.Render(fmt.Sprintf("PRs Merged This Week: %d", len(d.MergedPRs))))
+	// Merged PRs bar chart (last 12 weeks)
+	b.WriteString(accentStyle.Render("PRs Merged Per Week"))
 	b.WriteString("\n")
 	b.WriteString(sep)
 	b.WriteString("\n")
 
-	if len(d.MergedPRs) == 0 {
-		b.WriteString(subtleStyle.Render("  No merged PRs this week"))
-		b.WriteString("\n")
-	} else {
-		limit := min(len(d.MergedPRs), 5)
-		for _, pr := range d.MergedPRs[:limit] {
-			elapsed := time.Since(pr.MergedAt)
-			timeStr := formatDuration(elapsed)
-			label := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
-			// Truncate title to fit
-			titleMaxLen := maxWidth - len(label) - len(timeStr) - 8
-			title := pr.Title
-			if titleMaxLen > 0 && len(title) > titleMaxLen {
-				title = title[:titleMaxLen-1] + "…"
-			}
-			line := fmt.Sprintf("  %-20s  %-*s  %s",
-				label,
-				maxWidth-30-len(timeStr),
-				title,
-				subtleStyle.Render(timeStr),
-			)
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
-		if len(d.MergedPRs) > 5 {
-			b.WriteString(subtleStyle.Render(fmt.Sprintf("  ... and %d more", len(d.MergedPRs)-5)))
-			b.WriteString("\n")
-		}
-	}
-	b.WriteString("\n")
+	chartData := d.buildWeeklyChartData(12)
+	chart := renderBarChart(chartData, maxWidth-4, 10, m.theme.Accent, m.theme.Subtle, m.theme.StatusSuccess)
+	b.WriteString(chart)
+	b.WriteString("\n\n")
 
 	// Review latency + CI pass rate
 	avgReview := d.averageReviewLatency()

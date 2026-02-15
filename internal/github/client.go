@@ -313,6 +313,59 @@ func (c *Client) SearchMergedPRsThisWeek(ctx context.Context, username string) (
 	return merged, nil
 }
 
+// SearchMergedPRsSince fetches PRs merged by the user since the given date.
+// Uses per_page=100 to cover typical 12-week history in a single request.
+func (c *Client) SearchMergedPRsSince(ctx context.Context, username string, since time.Time) ([]MergedPRInfo, error) {
+	sinceStr := since.Format("2006-01-02")
+
+	q := fmt.Sprintf("author:%s+type:pr+is:merged+merged:>=%s", username, sinceStr)
+	u := fmt.Sprintf("%s/search/issues?q=%s&sort=updated&order=desc&per_page=100", baseURL, q)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search merged PRs since %s: status %d", sinceStr, resp.StatusCode)
+	}
+
+	var result SearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode merged PR search: %w", err)
+	}
+
+	var merged []MergedPRInfo
+	for _, item := range result.Items {
+		owner, repo := parseRepoURL(item.RepositoryURL)
+		if owner == "" || repo == "" {
+			continue
+		}
+		mergedAt := time.Time{}
+		if item.ClosedAt != nil {
+			mergedAt = *item.ClosedAt
+		}
+		merged = append(merged, MergedPRInfo{
+			Owner:    owner,
+			Repo:     repo,
+			Number:   item.Number,
+			Title:    item.Title,
+			URL:      item.HTMLURL,
+			MergedAt: mergedAt,
+		})
+	}
+
+	return merged, nil
+}
+
 // GetPullRequest fetches a specific pull request
 func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", baseURL, owner, repo, number)
@@ -371,31 +424,98 @@ func (c *Client) GetPullRequestReviews(ctx context.Context, owner, repo string, 
 	return reviews, nil
 }
 
-// GetCheckRuns fetches check runs for a given commit SHA
+// GetCheckRuns fetches all check runs for a given commit SHA, paginating
+// through all pages to ensure none are missed.
 func (c *Client) GetCheckRuns(ctx context.Context, owner, repo, sha string) (*CheckRunsResponse, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs", baseURL, owner, repo, sha)
+	var allCheckRuns []CheckRun
+	totalCount := 0
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
+	for page := 1; ; page++ {
+		pageURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs?per_page=100&page=%d", baseURL, owner, repo, sha, page)
+
+		req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		c.setHeaders(req)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		}
+
+		var result CheckRunsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode check runs: %w", err)
+		}
+		resp.Body.Close()
+
+		totalCount = result.TotalCount
+		allCheckRuns = append(allCheckRuns, result.CheckRuns...)
+
+		if len(allCheckRuns) >= totalCount || len(result.CheckRuns) < 100 {
+			break
+		}
 	}
 
-	c.setHeaders(req)
+	return &CheckRunsResponse{
+		TotalCount: totalCount,
+		CheckRuns:  allCheckRuns,
+	}, nil
+}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
+// GetCommitStatus fetches the combined commit status for a given SHA.
+// This covers legacy status checks (e.g. older CI systems) that don't use
+// the newer Check Runs API.
+func (c *Client) GetCommitStatus(ctx context.Context, owner, repo, sha string) (*CombinedStatus, error) {
+	var allStatuses []CommitStatus
+	totalCount := 0
+
+	for page := 1; ; page++ {
+		pageURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/status?per_page=100&page=%d", baseURL, owner, repo, sha, page)
+
+		req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		c.setHeaders(req)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		}
+
+		var result CombinedStatus
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode commit status: %w", err)
+		}
+		resp.Body.Close()
+
+		totalCount = result.TotalCount
+		allStatuses = append(allStatuses, result.Statuses...)
+
+		if len(allStatuses) >= totalCount || len(result.Statuses) < 100 {
+			break
+		}
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	var result CheckRunsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode check runs: %w", err)
-	}
-
-	return &result, nil
+	return &CombinedStatus{
+		State:      "",
+		TotalCount: totalCount,
+		Statuses:   allStatuses,
+	}, nil
 }

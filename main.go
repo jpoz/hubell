@@ -69,15 +69,18 @@ func run() error {
 		return fmt.Errorf("failed to get authenticated user: %w", err)
 	}
 
+	// Create progress channel for loading checklist
+	progressCh := make(chan github.LoadingProgress, 8)
+
 	// Create poller with 30-second interval
-	poller := github.NewPoller(client, 30*time.Second, user.Login)
+	poller := github.NewPoller(client, 30*time.Second, user.Login, progressCh)
 	pollCh := poller.Start(ctx)
 
 	// Send test notification on startup
 	notify.SendDesktopNotification("hubell", "Application started successfully!")
 
 	// Create and run TUI
-	model := tui.New(ctx, client, pollCh)
+	model := tui.New(ctx, client, pollCh, progressCh)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

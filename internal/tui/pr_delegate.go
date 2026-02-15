@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -69,17 +70,25 @@ func (d PRDelegate) Render(w io.Writer, m list.Model, index int, item list.Item)
 	}
 
 	// Check dots (one per check run, colored by result)
+	// Sort: pending first, then failed, then successful so the most
+	// important statuses are visible when truncated.
 	if len(prItem.info.CheckRuns) > 0 {
+		sorted := make([]github.CheckRun, len(prItem.info.CheckRuns))
+		copy(sorted, prItem.info.CheckRuns)
+		sort.Slice(sorted, func(i, j int) bool {
+			return checkRunSortKey(sorted[i]) < checkRunSortKey(sorted[j])
+		})
+
 		var dots strings.Builder
 		dots.WriteString("  ")
-		shown := len(prItem.info.CheckRuns)
+		shown := len(sorted)
 		overflow := 0
 		if shown > maxCheckDots {
 			overflow = shown - maxCheckDots
 			shown = maxCheckDots
 		}
 		for i := 0; i < shown; i++ {
-			cr := prItem.info.CheckRuns[i]
+			cr := sorted[i]
 			var color lipgloss.Color
 			var dot string
 			switch {
@@ -151,4 +160,19 @@ func (d PRDelegate) Render(w io.Writer, m list.Model, index int, item list.Item)
 	}
 
 	fmt.Fprint(w, rendered)
+}
+
+// checkRunSortKey returns a sort priority for a check run:
+// 0 = pending/in-progress, 1 = failed/cancelled/timed_out, 2 = success, 3 = other.
+func checkRunSortKey(cr github.CheckRun) int {
+	switch {
+	case cr.Status == "queued" || cr.Status == "in_progress":
+		return 0
+	case cr.Conclusion == "failure" || cr.Conclusion == "cancelled" || cr.Conclusion == "timed_out":
+		return 1
+	case cr.Conclusion == "success":
+		return 2
+	default:
+		return 3
+	}
 }

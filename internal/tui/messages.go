@@ -6,11 +6,12 @@ import (
 
 // PollResultMsg is sent when new poll results are received
 type PollResultMsg struct {
-	Notifications []*github.Notification
-	PRStatuses    map[string]github.PRStatus
-	PRInfos       map[string]github.PRInfo
-	PRChanges     []github.PRStatusChange
-	MergedPRs     []github.MergedPRInfo
+	Notifications      []*github.Notification
+	PRStatuses         map[string]github.PRStatus
+	PRInfos            map[string]github.PRInfo
+	PRChanges          []github.PRStatusChange
+	MergedPRs          []github.MergedPRInfo
+	WeeklyMergedCounts map[string]int
 }
 
 // ErrorMsg is sent when an error occurs
@@ -35,3 +36,8 @@ type MarkAsReadErrorMsg struct {
 
 // BannerTickMsg is sent on each animation frame for the loading banner pulse
 type BannerTickMsg struct{}
+
+// LoadingProgressMsg relays a loading progress update from the poller
+type LoadingProgressMsg struct {
+	github.LoadingProgress
+}

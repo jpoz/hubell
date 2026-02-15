@@ -127,11 +127,14 @@ type Model struct {
 	lastNotifyCount  int
 	filterMode       FilterMode
 	focusedPane      Pane
-	loading          bool
-	bannerFrame      int
-	err              error
-	width            int
-	height           int
+	loading      bool
+	loadingSteps map[github.LoadingStep]bool
+	prProgress   github.LoadingProgress
+	progressCh   <-chan github.LoadingProgress
+	bannerFrame  int
+	err          error
+	width        int
+	height       int
 
 	theme             Theme
 	showThemeSelector bool
@@ -142,7 +145,7 @@ type Model struct {
 }
 
 // New creates a new TUI model
-func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollResult) *Model {
+func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollResult, progressCh <-chan github.LoadingProgress) *Model {
 	ctx, cancel := context.WithCancel(ctx)
 
 	theme := GetTheme(config.LoadTheme())
@@ -163,11 +166,18 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 	pl.SetFilteringEnabled(true)
 	applyListTheme(&pl, theme)
 
+	dashStats := newDashboardStats()
+	cached := config.LoadWeeklyStats()
+	for k, v := range cached.Weeks {
+		dashStats.WeeklyMergedCounts[k] = v
+	}
+
 	return &Model{
 		list:             l,
 		prList:           pl,
 		githubClient:     client,
 		pollCh:           pollCh,
+		progressCh:       progressCh,
 		ctx:              ctx,
 		cancel:           cancel,
 		allNotifications: make(map[string]*github.Notification),
@@ -177,9 +187,10 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 		filterMode:       FilterMyPRs,
 		focusedPane:      LeftPane,
 		loading:          true,
+		loadingSteps:     make(map[github.LoadingStep]bool),
 		theme:            theme,
 		themeList:        buildThemeList(),
-		dashboardStats:   newDashboardStats(),
+		dashboardStats:   dashStats,
 	}
 }
 
@@ -187,9 +198,21 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		waitForPollResult(m.pollCh),
+		waitForLoadingStep(m.progressCh),
 		tea.EnterAltScreen,
 		bannerTick(),
 	)
+}
+
+// waitForLoadingStep reads the next loading progress update from the progress channel
+func waitForLoadingStep(ch <-chan github.LoadingProgress) tea.Cmd {
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return LoadingProgressMsg{p}
+	}
 }
 
 // bannerTick returns a command that sends a BannerTickMsg after a short delay
@@ -213,11 +236,12 @@ func waitForPollResult(pollCh <-chan github.PollResult) tea.Cmd {
 			return waitForPollResult(pollCh)()
 		}
 		return PollResultMsg{
-			Notifications: result.Notifications,
-			PRStatuses:    result.PRStatuses,
-			PRInfos:       result.PRInfos,
-			PRChanges:     result.PRChanges,
-			MergedPRs:     result.MergedPRs,
+			Notifications:      result.Notifications,
+			PRStatuses:         result.PRStatuses,
+			PRInfos:            result.PRInfos,
+			PRChanges:          result.PRChanges,
+			MergedPRs:          result.MergedPRs,
+			WeeklyMergedCounts: result.WeeklyMergedCounts,
 		}
 	}
 }

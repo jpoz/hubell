@@ -33,10 +33,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				fmt.Sprintf("PR #%d: %s (%s → %s)", change.Number, change.Title, change.OldStatus, change.NewStatus),
 			)
 		}
-		m.dashboardStats.updateFromPollResult(msg.MergedPRs, msg.PRInfos)
+		m.dashboardStats.updateFromPollResult(msg.MergedPRs, msg.WeeklyMergedCounts, msg.PRInfos)
 		m.updateNotifications(msg.Notifications)
 		m.updatePRList()
 		return m, waitForPollResult(m.pollCh)
+
+	case LoadingProgressMsg:
+		if msg.Done {
+			m.loadingSteps[msg.Step] = true
+		}
+		m.prProgress = msg.LoadingProgress
+		return m, waitForLoadingStep(m.progressCh)
 
 	case BannerTickMsg:
 		if m.loading {

@@ -6,17 +6,22 @@ import (
 	"strings"
 )
 
-// pollAllPRs fetches all open PRs and their CI statuses
-func pollAllPRs(ctx context.Context, client *Client, username string) (map[string]PRStatus, map[string]PRInfo, error) {
+// pollAllPRs fetches all open PRs and their CI statuses.
+// If progressCh is non-nil, per-PR progress updates are sent on it.
+func pollAllPRs(ctx context.Context, client *Client, username string, progressCh chan<- LoadingProgress) (map[string]PRStatus, map[string]PRInfo, error) {
 	searchResult, err := client.SearchUserOpenPRs(ctx, username)
 	if err != nil {
 		return nil, nil, fmt.Errorf("searching open PRs: %w", err)
 	}
 
+	total := len(searchResult.Items)
 	statuses := make(map[string]PRStatus)
 	infos := make(map[string]PRInfo)
 
-	for _, item := range searchResult.Items {
+	for i, item := range searchResult.Items {
+		if progressCh != nil {
+			progressCh <- LoadingProgress{Step: StepPullRequests, Current: i, Total: total}
+		}
 		owner, repo := parseRepoURL(item.RepositoryURL)
 		if owner == "" || repo == "" {
 			continue
@@ -42,6 +47,16 @@ func pollAllPRs(ctx context.Context, client *Client, username string) (map[strin
 		if err != nil {
 			statuses[key] = PRStatusNone
 			continue
+		}
+
+		// Fetch legacy commit statuses and merge them in as synthetic CheckRuns
+		// so the display layer handles them uniformly.
+		commitStatus, err := client.GetCommitStatus(ctx, owner, repo, pr.Head.SHA)
+		if err == nil {
+			for _, s := range commitStatus.Statuses {
+				checkRuns.CheckRuns = append(checkRuns.CheckRuns, statusToCheckRun(s))
+				checkRuns.TotalCount++
+			}
 		}
 
 		statuses[key] = computeAggregateStatus(checkRuns)
@@ -148,4 +163,30 @@ func computeAggregateStatus(checkRuns *CheckRunsResponse) PRStatus {
 	}
 
 	return PRStatusSuccess
+}
+
+// statusToCheckRun converts a legacy CommitStatus into a CheckRun so the
+// display layer can handle both uniformly.
+func statusToCheckRun(s CommitStatus) CheckRun {
+	cr := CheckRun{
+		ID:   s.ID,
+		Name: s.Context,
+	}
+
+	switch s.State {
+	case "success":
+		cr.Status = "completed"
+		cr.Conclusion = "success"
+	case "failure", "error":
+		cr.Status = "completed"
+		cr.Conclusion = "failure"
+	case "pending":
+		cr.Status = "in_progress"
+		cr.Conclusion = ""
+	default:
+		cr.Status = "completed"
+		cr.Conclusion = s.State
+	}
+
+	return cr
 }

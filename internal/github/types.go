@@ -84,6 +84,21 @@ type CheckRun struct {
 	Conclusion string `json:"conclusion"`
 }
 
+// CombinedStatus represents the response from the commit status API
+type CombinedStatus struct {
+	State      string         `json:"state"`
+	TotalCount int            `json:"total_count"`
+	Statuses   []CommitStatus `json:"statuses"`
+}
+
+// CommitStatus represents a single legacy commit status
+type CommitStatus struct {
+	ID          int    `json:"id"`
+	Context     string `json:"context"`
+	State       string `json:"state"` // "error", "failure", "pending", "success"
+	Description string `json:"description"`
+}
+
 // PRInfo contains metadata about an open pull request
 type PRInfo struct {
 	Owner       string
