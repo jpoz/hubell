@@ -24,11 +24,12 @@ func pollAllPRs(ctx context.Context, client *Client, username string) (map[strin
 
 		key := PRKey(owner, repo, item.Number)
 		infos[key] = PRInfo{
-			Owner:  owner,
-			Repo:   repo,
-			Number: item.Number,
-			Title:  item.Title,
-			URL:    item.HTMLURL,
+			Owner:     owner,
+			Repo:      repo,
+			Number:    item.Number,
+			Title:     item.Title,
+			URL:       item.HTMLURL,
+			CreatedAt: item.CreatedAt,
 		}
 
 		pr, err := client.GetPullRequest(ctx, owner, repo, item.Number)
@@ -45,12 +46,17 @@ func pollAllPRs(ctx context.Context, client *Client, username string) (map[strin
 
 		statuses[key] = computeAggregateStatus(checkRuns)
 
+		// Populate diff stats and check runs from already-fetched data
+		info := infos[key]
+		info.Additions = pr.Additions
+		info.Deletions = pr.Deletions
+		info.CheckRuns = checkRuns.CheckRuns
+
 		reviews, err := client.GetPullRequestReviews(ctx, owner, repo, item.Number)
 		if err == nil {
-			info := infos[key]
 			info.ReviewState = computeReviewState(reviews)
-			infos[key] = info
 		}
+		infos[key] = info
 	}
 
 	return statuses, infos, nil

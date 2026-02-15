@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jpoz/hubell/internal/config"
 	"github.com/jpoz/hubell/internal/github"
 	"github.com/jpoz/hubell/internal/notify"
 )
@@ -71,29 +72,9 @@ func (i PRItem) FilterValue() string {
 	return i.info.Title
 }
 
-// Title implements list.DefaultItem
+// Title implements list.DefaultItem (used as FilterValue fallback)
 func (i PRItem) Title() string {
-	statusIndicator := ""
-	switch i.status {
-	case github.PRStatusSuccess:
-		statusIndicator = " [OK]"
-	case github.PRStatusFailure:
-		statusIndicator = " [FAIL]"
-	case github.PRStatusPending:
-		statusIndicator = " [...]"
-	}
-
-	reviewIndicator := ""
-	switch i.info.ReviewState {
-	case github.PRReviewApproved:
-		reviewIndicator = " [Approved]"
-	case github.PRReviewChangesRequested:
-		reviewIndicator = " [Changes Requested]"
-	case github.PRReviewReviewed:
-		reviewIndicator = " [Reviewed]"
-	}
-
-	return fmt.Sprintf("%s/%s#%d%s%s", i.info.Owner, i.info.Repo, i.info.Number, statusIndicator, reviewIndicator)
+	return fmt.Sprintf("%s/%s#%d %s", i.info.Owner, i.info.Repo, i.info.Number, i.info.Title)
 }
 
 // Description implements list.DefaultItem
@@ -151,25 +132,33 @@ type Model struct {
 	err              error
 	width            int
 	height           int
+
+	theme             Theme
+	showThemeSelector bool
+	themeList         list.Model
 }
 
 // New creates a new TUI model
 func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollResult) *Model {
 	ctx, cancel := context.WithCancel(ctx)
 
-	// Initialize notification list with default delegate
-	delegate := list.NewDefaultDelegate()
+	theme := GetTheme(config.LoadTheme())
+
+	// Initialize notification list with themed delegate
+	delegate := newThemedDelegate(theme)
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = "Notifications"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
+	applyListTheme(&l, theme)
 
-	// Initialize PR list
-	prDelegate := list.NewDefaultDelegate()
+	// Initialize PR list with custom delegate for colored rendering
+	prDelegate := newPRDelegate(theme)
 	pl := list.New([]list.Item{}, prDelegate, 0, 0)
 	pl.Title = "Open PRs"
 	pl.SetShowStatusBar(false)
 	pl.SetFilteringEnabled(true)
+	applyListTheme(&pl, theme)
 
 	return &Model{
 		list:             l,
@@ -185,6 +174,8 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 		filterMode:       FilterMyPRs,
 		focusedPane:      LeftPane,
 		loading:          true,
+		theme:            theme,
+		themeList:        buildThemeList(),
 	}
 }
 
@@ -310,20 +301,17 @@ func (m *Model) updateNotifications(incoming []*github.Notification) {
 
 // updatePRList rebuilds the right-pane PR list from current prInfos and prStatuses
 func (m *Model) updatePRList() {
-	// Collect and sort keys for stable ordering
-	keys := make([]string, 0, len(m.prInfos))
-	for k := range m.prInfos {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	items := make([]list.Item, 0, len(keys))
-	for _, key := range keys {
+	// Collect PRItems and sort by CreatedAt descending (newest first)
+	items := make([]list.Item, 0, len(m.prInfos))
+	for key := range m.prInfos {
 		items = append(items, PRItem{
 			info:   m.prInfos[key],
 			status: m.prStatuses[key],
 		})
 	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].(PRItem).info.CreatedAt.After(items[j].(PRItem).info.CreatedAt)
+	})
 	m.prList.SetItems(items)
 }
 

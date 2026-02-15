@@ -42,11 +42,12 @@ type SearchResult struct {
 
 // SearchItem represents an item from the search API
 type SearchItem struct {
-	Number            int            `json:"number"`
-	Title             string         `json:"title"`
-	HTMLURL           string         `json:"html_url"`
-	PullRequestRef    PullRequestRef `json:"pull_request"`
-	RepositoryURL     string         `json:"repository_url"`
+	Number         int            `json:"number"`
+	Title          string         `json:"title"`
+	HTMLURL        string         `json:"html_url"`
+	CreatedAt      time.Time      `json:"created_at"`
+	PullRequestRef PullRequestRef `json:"pull_request"`
+	RepositoryURL  string         `json:"repository_url"`
 }
 
 // PullRequestRef contains pull request metadata from a search result
@@ -56,9 +57,11 @@ type PullRequestRef struct {
 
 // PullRequest represents a GitHub pull request
 type PullRequest struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Head   PRHead `json:"head"`
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	Head      PRHead `json:"head"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
 }
 
 // PRHead represents the head ref of a pull request
@@ -87,7 +90,11 @@ type PRInfo struct {
 	Number      int
 	Title       string
 	URL         string
+	CreatedAt   time.Time
 	ReviewState PRReviewState
+	Additions   int
+	Deletions   int
+	CheckRuns   []CheckRun
 }
 
 // PRReviewState represents the aggregate review approval state of a PR
