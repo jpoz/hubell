@@ -453,6 +453,35 @@ func (c *Client) GetPullRequestReviews(ctx context.Context, owner, repo string, 
 	return reviews, nil
 }
 
+// GetIssueComments fetches comments on an issue or pull request.
+func (c *Client) GetIssueComments(ctx context.Context, owner, repo string, number int, since time.Time) ([]IssueComment, error) {
+	sinceStr := since.Format(time.RFC3339)
+	u := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments?since=%s&per_page=100", baseURL, owner, repo, number, sinceStr)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get issue comments: status %d", resp.StatusCode)
+	}
+
+	var comments []IssueComment
+	if err := json.NewDecoder(resp.Body).Decode(&comments); err != nil {
+		return nil, fmt.Errorf("decode issue comments: %w", err)
+	}
+
+	return comments, nil
+}
+
 // GetCheckRuns fetches all check runs for a given commit SHA, paginating
 // through all pages to ensure none are missed.
 func (c *Client) GetCheckRuns(ctx context.Context, owner, repo, sha string) (*CheckRunsResponse, error) {

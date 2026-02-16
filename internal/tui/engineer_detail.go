@@ -10,8 +10,8 @@ import (
 
 // renderEngineerDetail renders the engineer drill-down overlay.
 func (m *Model) renderEngineerDetail() string {
-	maxWidth := max(min(80, m.width-4), 40)
-	maxHeight := max(m.height-4, 10)
+	maxWidth := max(m.width-2, 40)
+	maxHeight := max(m.height-2, 10)
 
 	titleStyle := lipgloss.NewStyle().Foreground(m.theme.Title).Bold(true)
 	accentStyle := lipgloss.NewStyle().Foreground(m.theme.Accent).Bold(true)
@@ -58,6 +58,7 @@ func (m *Model) renderEngineerDetail() string {
 	} else {
 		for i, pr := range d.MergedPRs {
 			repoID := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+			mergedTime := subtleStyle.Render(pr.MergedAt.Local().Format("Jan 2 3:04pm"))
 			diffStr := ""
 			if pr.Additions > 0 || pr.Deletions > 0 {
 				diffStr = fmt.Sprintf("  %s %s",
@@ -65,7 +66,7 @@ func (m *Model) renderEngineerDetail() string {
 					failureStyle.Render(fmt.Sprintf("-%d", pr.Deletions)))
 			}
 
-			line := repoID + diffStr
+			line := repoID + diffStr + "  " + mergedTime
 			if i == m.engineerSelectedPR {
 				lines = append(lines, selectedStyle.Render("▸ "+line))
 			} else {
@@ -105,39 +106,63 @@ func (m *Model) renderEngineerDetail() string {
 	}
 	lines = append(lines, "")
 
-	// Daily Activity chart
+	// Daily Activity chart (merges + reviews + comments)
+	mergeBarStyle := lipgloss.NewStyle().Foreground(m.theme.StatusSuccess)
+	reviewBarStyle := lipgloss.NewStyle().Foreground(m.theme.Accent)
+	commentBarStyle := lipgloss.NewStyle().Foreground(m.theme.StatusPending)
+
 	lines = append(lines, accentStyle.Render("Daily Activity"))
+	legend := fmt.Sprintf("  %s Merges  %s Reviews  %s Comments",
+		mergeBarStyle.Render("█"),
+		reviewBarStyle.Render("█"),
+		commentBarStyle.Render("█"))
+	lines = append(lines, legend)
 	lines = append(lines, sep)
 
-	// Find max for scaling (Mon-Fri only for bar chart, show all 7 days)
 	dayNames := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
 	dayIndices := []int{1, 2, 3, 4, 5, 6, 0} // time.Weekday: 0=Sun, 1=Mon, ...
 
 	maxActivity := 0
 	for _, idx := range dayIndices {
-		if d.DailyActivity[idx] > maxActivity {
-			maxActivity = d.DailyActivity[idx]
+		total := d.DailyMerges[idx] + d.DailyReviews[idx] + d.DailyComments[idx]
+		if total > maxActivity {
+			maxActivity = total
 		}
 	}
 
-	barMaxWidth := max(innerWidth-16, 10) // space for "  Mon ████  N"
+	barMaxWidth := max(innerWidth-20, 10)
 	for i, dayIdx := range dayIndices {
-		count := d.DailyActivity[dayIdx]
-		barLen := 0
-		if maxActivity > 0 {
-			barLen = count * barMaxWidth / maxActivity
-			if count > 0 && barLen == 0 {
-				barLen = 1
+		merges := d.DailyMerges[dayIdx]
+		reviews := d.DailyReviews[dayIdx]
+		comments := d.DailyComments[dayIdx]
+		total := merges + reviews + comments
+
+		mergeLen, reviewLen, commentLen := 0, 0, 0
+		if maxActivity > 0 && total > 0 {
+			fullBar := total * barMaxWidth / maxActivity
+			if fullBar == 0 {
+				fullBar = 1
+			}
+			mergeLen = merges * fullBar / total
+			reviewLen = reviews * fullBar / total
+			commentLen = fullBar - mergeLen - reviewLen
+			// Ensure each non-zero type gets at least 1 char
+			if merges > 0 && mergeLen == 0 {
+				mergeLen = 1
+			}
+			if reviews > 0 && reviewLen == 0 {
+				reviewLen = 1
+			}
+			if comments > 0 && commentLen == 0 {
+				commentLen = 1
 			}
 		}
 
-		bar := strings.Repeat("█", barLen)
-		dayStyle := normalStyle
-		if i < 5 { // weekdays
-			dayStyle = accentStyle
-		}
+		bar := mergeBarStyle.Render(strings.Repeat("█", mergeLen)) +
+			reviewBarStyle.Render(strings.Repeat("█", reviewLen)) +
+			commentBarStyle.Render(strings.Repeat("█", commentLen))
 
-		line := fmt.Sprintf("  %s %s  %d", dayNames[i], dayStyle.Render(bar), count)
+		line := fmt.Sprintf("  %s %s  %d", dayNames[i], bar, total)
 		lines = append(lines, line)
 	}
 	lines = append(lines, "")

@@ -62,8 +62,8 @@ func (m *Model) renderOrgDashboard() string {
 		return m.renderOrgInput()
 	}
 
-	maxWidth := max(min(76, m.width-4), 40)
-	maxHeight := max(m.height-6, 10)
+	maxWidth := max(m.width-2, 40)
+	maxHeight := max(m.height-2, 10)
 
 	titleStyle := lipgloss.NewStyle().Foreground(m.theme.Title).Bold(true)
 	accentStyle := lipgloss.NewStyle().Foreground(m.theme.Accent).Bold(true)

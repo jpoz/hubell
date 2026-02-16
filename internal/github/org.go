@@ -257,7 +257,7 @@ func (c *Client) FetchEngineerDetail(ctx context.Context, org, login string) (*E
 		repoSet[owner+"/"+repo] = true
 
 		if !mergedAt.IsZero() {
-			detail.DailyActivity[int(mergedAt.Weekday())]++
+			detail.DailyMerges[int(mergedAt.Weekday())]++
 		}
 
 		detail.MergedPRs = append(detail.MergedPRs, d)
@@ -311,12 +311,36 @@ func (c *Client) FetchEngineerDetail(ctx context.Context, org, login string) (*E
 			URL:    item.HTMLURL,
 			Author: item.User.Login,
 		})
+
+		// Fetch individual reviews for daily activity tracking
+		reviews, err := c.GetPullRequestReviews(ctx, owner, repo, item.Number)
+		if err == nil {
+			for _, r := range reviews {
+				if strings.EqualFold(r.User.Login, login) && !r.SubmittedAt.Before(since) {
+					detail.DailyReviews[int(r.SubmittedAt.Weekday())]++
+				}
+			}
+		}
 	}
 
 	// Comments given (PRs commented on, not authored)
 	q = fmt.Sprintf("org:%s+type:pr+commenter:%s+-author:%s+updated:>=%s", org, login, login, sinceStr)
 	commentItems, _ := c.searchAllPages(ctx, q)
-	detail.CommentsGiven = len(commentItems)
+	for _, item := range commentItems {
+		owner, repo := parseRepoURL(item.RepositoryURL)
+		if owner == "" {
+			continue
+		}
+		comments, err := c.GetIssueComments(ctx, owner, repo, item.Number, since)
+		if err == nil {
+			for _, comment := range comments {
+				if strings.EqualFold(comment.User.Login, login) {
+					detail.CommentsGiven++
+					detail.DailyComments[int(comment.CreatedAt.Weekday())]++
+				}
+			}
+		}
+	}
 
 	// Comments received (other people commenting on user's PRs)
 	q = fmt.Sprintf("org:%s+type:pr+author:%s+comments:>0+updated:>=%s", org, login, sinceStr)

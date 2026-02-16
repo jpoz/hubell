@@ -144,6 +144,13 @@ type Review struct {
 	SubmittedAt time.Time `json:"submitted_at"`
 }
 
+// IssueComment represents a comment on an issue or pull request
+type IssueComment struct {
+	ID        int       `json:"id"`
+	User      User      `json:"user"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // PRStatus represents the aggregate CI status of a pull request
 type PRStatus string
 
@@ -183,7 +190,9 @@ type EngineerDetail struct {
 	MergedPRs        []DetailedMergedPR
 	OpenPRs          []DetailedOpenPR
 	ReviewedPRs      []ReviewedPRInfo
-	DailyActivity    [7]int // indexed by time.Weekday (0=Sun, 1=Mon, ..., 6=Sat)
+	DailyMerges      [7]int // indexed by time.Weekday (0=Sun, 1=Mon, ..., 6=Sat)
+	DailyReviews     [7]int
+	DailyComments    [7]int
 	AvgAdditions     int
 	AvgDeletions     int
 	AvgTimeToMerge   time.Duration
