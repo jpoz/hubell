@@ -143,14 +143,44 @@ func (c *Client) GetAuthenticatedUser(ctx context.Context) (*User, error) {
 // SearchUserOpenPRs fetches all open pull requests created by the authenticated user.
 // It merges results from /user/issues (which includes private repos when the token has
 // repo scope) and the search API (which includes PRs on repos where the user is not a
-// member, e.g. open source contributions via forks).
+// member, e.g. open source contributions via forks). Both sources are queried concurrently.
 func (c *Client) SearchUserOpenPRs(ctx context.Context, username string) (*SearchResult, error) {
+	type sourceResult struct {
+		items []SearchItem
+		err   error
+	}
+
+	userCh := make(chan sourceResult, 1)
+	searchCh := make(chan sourceResult, 1)
+
+	// /user/issues covers private repos where the user is a collaborator/member
+	go func() {
+		result, err := c.listUserOpenPRs(ctx)
+		if err != nil {
+			userCh <- sourceResult{err: err}
+		} else {
+			userCh <- sourceResult{items: result.Items}
+		}
+	}()
+
+	// Search API covers external repos (forks, open source contributions)
+	go func() {
+		result, err := c.searchUserOpenPRs(ctx, username)
+		if err != nil {
+			searchCh <- sourceResult{err: err}
+		} else {
+			searchCh <- sourceResult{items: result.Items}
+		}
+	}()
+
+	ur := <-userCh
+	sr := <-searchCh
+
 	seen := make(map[string]struct{})
 	var allItems []SearchItem
 
-	// /user/issues covers private repos where the user is a collaborator/member
-	if result, err := c.listUserOpenPRs(ctx); err == nil {
-		for _, item := range result.Items {
+	if ur.err == nil {
+		for _, item := range ur.items {
 			key := item.HTMLURL
 			if _, ok := seen[key]; !ok {
 				seen[key] = struct{}{}
@@ -159,9 +189,8 @@ func (c *Client) SearchUserOpenPRs(ctx context.Context, username string) (*Searc
 		}
 	}
 
-	// Search API covers external repos (forks, open source contributions)
-	if result, err := c.searchUserOpenPRs(ctx, username); err == nil {
-		for _, item := range result.Items {
+	if sr.err == nil {
+		for _, item := range sr.items {
 			key := item.HTMLURL
 			if _, ok := seen[key]; !ok {
 				seen[key] = struct{}{}

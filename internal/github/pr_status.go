@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
-// pollAllPRs fetches all open PRs and their CI statuses.
+// pollAllPRs fetches all open PRs and their CI statuses concurrently.
 // If progressCh is non-nil, per-PR progress updates are sent on it.
 func pollAllPRs(ctx context.Context, client *Client, username string, progressCh chan<- LoadingProgress) (map[string]PRStatus, map[string]PRInfo, error) {
 	searchResult, err := client.SearchUserOpenPRs(ctx, username)
@@ -18,63 +20,95 @@ func pollAllPRs(ctx context.Context, client *Client, username string, progressCh
 	statuses := make(map[string]PRStatus)
 	infos := make(map[string]PRInfo)
 
-	for i, item := range searchResult.Items {
-		if progressCh != nil {
-			progressCh <- LoadingProgress{Step: StepPullRequests, Current: i, Total: total}
-		}
+	var (
+		mu        sync.Mutex
+		wg        sync.WaitGroup
+		completed int32
+		sem       = make(chan struct{}, 5) // limit concurrent API calls
+	)
+
+	for _, item := range searchResult.Items {
 		owner, repo := parseRepoURL(item.RepositoryURL)
 		if owner == "" || repo == "" {
 			continue
 		}
 
-		key := PRKey(owner, repo, item.Number)
-		infos[key] = PRInfo{
-			Owner:     owner,
-			Repo:      repo,
-			Number:    item.Number,
-			Title:     item.Title,
-			URL:       item.HTMLURL,
-			CreatedAt: item.CreatedAt,
-		}
+		wg.Add(1)
+		go func(item SearchItem, owner, repo string) {
+			defer wg.Done()
+			sem <- struct{}{}        // acquire
+			defer func() { <-sem }() // release
 
-		pr, err := client.GetPullRequest(ctx, owner, repo, item.Number)
-		if err != nil {
-			statuses[key] = PRStatusNone
-			continue
-		}
-
-		checkRuns, err := client.GetCheckRuns(ctx, owner, repo, pr.Head.SHA)
-		if err != nil {
-			statuses[key] = PRStatusNone
-			continue
-		}
-
-		// Fetch legacy commit statuses and merge them in as synthetic CheckRuns
-		// so the display layer handles them uniformly.
-		commitStatus, err := client.GetCommitStatus(ctx, owner, repo, pr.Head.SHA)
-		if err == nil {
-			for _, s := range commitStatus.Statuses {
-				checkRuns.CheckRuns = append(checkRuns.CheckRuns, statusToCheckRun(s))
-				checkRuns.TotalCount++
+			key := PRKey(owner, repo, item.Number)
+			info := PRInfo{
+				Owner:     owner,
+				Repo:      repo,
+				Number:    item.Number,
+				Title:     item.Title,
+				URL:       item.HTMLURL,
+				CreatedAt: item.CreatedAt,
 			}
-		}
+			status := PRStatusNone
 
-		statuses[key] = computeAggregateStatus(checkRuns)
+			pr, err := client.GetPullRequest(ctx, owner, repo, item.Number)
+			if err == nil {
+				info.Additions = pr.Additions
+				info.Deletions = pr.Deletions
 
-		// Populate diff stats and check runs from already-fetched data
-		info := infos[key]
-		info.Additions = pr.Additions
-		info.Deletions = pr.Deletions
-		info.CheckRuns = checkRuns.CheckRuns
+				// Fetch check runs, commit status, and reviews concurrently
+				var (
+					checkRuns    *CheckRunsResponse
+					commitStatus *CombinedStatus
+					reviews      []Review
+					crErr        error
+					innerWg      sync.WaitGroup
+				)
 
-		reviews, err := client.GetPullRequestReviews(ctx, owner, repo, item.Number)
-		if err == nil {
-			info.ReviewState = computeReviewState(reviews)
-			info.Reviews = reviews
-		}
-		infos[key] = info
+				innerWg.Add(3)
+				go func() {
+					defer innerWg.Done()
+					checkRuns, crErr = client.GetCheckRuns(ctx, owner, repo, pr.Head.SHA)
+				}()
+				go func() {
+					defer innerWg.Done()
+					commitStatus, _ = client.GetCommitStatus(ctx, owner, repo, pr.Head.SHA)
+				}()
+				go func() {
+					defer innerWg.Done()
+					reviews, _ = client.GetPullRequestReviews(ctx, owner, repo, item.Number)
+				}()
+				innerWg.Wait()
+
+				if crErr == nil {
+					if commitStatus != nil {
+						for _, s := range commitStatus.Statuses {
+							checkRuns.CheckRuns = append(checkRuns.CheckRuns, statusToCheckRun(s))
+							checkRuns.TotalCount++
+						}
+					}
+					status = computeAggregateStatus(checkRuns)
+					info.CheckRuns = checkRuns.CheckRuns
+				}
+
+				if reviews != nil {
+					info.ReviewState = computeReviewState(reviews)
+					info.Reviews = reviews
+				}
+			}
+
+			done := atomic.AddInt32(&completed, 1)
+			if progressCh != nil {
+				progressCh <- LoadingProgress{Step: StepPullRequests, Current: int(done), Total: total}
+			}
+
+			mu.Lock()
+			statuses[key] = status
+			infos[key] = info
+			mu.Unlock()
+		}(item, owner, repo)
 	}
 
+	wg.Wait()
 	return statuses, infos, nil
 }
 

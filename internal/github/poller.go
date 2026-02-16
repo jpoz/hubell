@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"sync"
 	"time"
 )
 
@@ -91,50 +92,81 @@ func (p *Poller) Start(ctx context.Context) <-chan PollResult {
 	return resultCh
 }
 
-// poll performs a single poll cycle for both notifications and PR statuses
+// poll performs a single poll cycle for both notifications and PR statuses.
+// All independent API calls run concurrently to minimize startup latency.
 func (p *Poller) poll(ctx context.Context, firstPoll bool) PollResult {
-	notifications, notifErr := p.client.ListNotifications(ctx)
-	if firstPoll && p.progressCh != nil {
-		p.progressCh <- LoadingProgress{Step: StepNotifications, Done: true}
-	}
+	var (
+		notifications      []*Notification
+		notifErr           error
+		prStatuses         map[string]PRStatus
+		prInfos            map[string]PRInfo
+		prErr              error
+		mergedPRs          []MergedPRInfo
+		weeklyMergedCounts map[string]int
+	)
 
-	var prProgressCh chan<- LoadingProgress
+	var wg sync.WaitGroup
+
+	// 1. Notifications
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		notifications, notifErr = p.client.ListNotifications(ctx)
+		if firstPoll && p.progressCh != nil {
+			p.progressCh <- LoadingProgress{Step: StepNotifications, Done: true}
+		}
+	}()
+
+	// 2. Open PR statuses
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var prProgressCh chan<- LoadingProgress
+		if firstPoll {
+			prProgressCh = p.progressCh
+		}
+		prStatuses, prInfos, prErr = pollAllPRs(ctx, p.client, p.username, prProgressCh)
+		if firstPoll && p.progressCh != nil {
+			p.progressCh <- LoadingProgress{Step: StepPullRequests, Done: true}
+		}
+	}()
+
+	// 3. Merged PRs this week
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if merged, err := p.client.SearchMergedPRsThisWeek(ctx, p.username); err == nil {
+			mergedPRs = merged
+		}
+		if firstPoll && p.progressCh != nil {
+			p.progressCh <- LoadingProgress{Step: StepMergedPRs, Done: true}
+		}
+	}()
+
+	// 4. Weekly stats backfill (first poll only)
 	if firstPoll {
-		prProgressCh = p.progressCh
-	}
-	prStatuses, prInfos, prErr := pollAllPRs(ctx, p.client, p.username, prProgressCh)
-	if firstPoll && p.progressCh != nil {
-		p.progressCh <- LoadingProgress{Step: StepPullRequests, Done: true}
-	}
-
-	// Fetch merged PRs for dashboard (errors swallowed — informational only)
-	var mergedPRs []MergedPRInfo
-	if merged, err := p.client.SearchMergedPRsThisWeek(ctx, p.username); err == nil {
-		mergedPRs = merged
-	}
-	if firstPoll && p.progressCh != nil {
-		p.progressCh <- LoadingProgress{Step: StepMergedPRs, Done: true}
-	}
-
-	// On first poll, backfill weekly merged counts for the last 12 weeks
-	var weeklyMergedCounts map[string]int
-	if firstPoll {
-		since := time.Now().AddDate(0, 0, -12*7)
-		if allMerged, err := p.client.SearchMergedPRsSince(ctx, p.username, since); err == nil {
-			weeklyMergedCounts = make(map[string]int)
-			for _, pr := range allMerged {
-				if pr.MergedAt.IsZero() {
-					continue
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			since := time.Now().AddDate(0, 0, -12*7)
+			if allMerged, err := p.client.SearchMergedPRsSince(ctx, p.username, since); err == nil {
+				weeklyMergedCounts = make(map[string]int)
+				for _, pr := range allMerged {
+					if pr.MergedAt.IsZero() {
+						continue
+					}
+					year, week := pr.MergedAt.ISOWeek()
+					key := fmt.Sprintf("%d-W%02d", year, week)
+					weeklyMergedCounts[key]++
 				}
-				year, week := pr.MergedAt.ISOWeek()
-				key := fmt.Sprintf("%d-W%02d", year, week)
-				weeklyMergedCounts[key]++
 			}
-		}
-		if p.progressCh != nil {
-			p.progressCh <- LoadingProgress{Step: StepWeeklyStats, Done: true}
-		}
+			if p.progressCh != nil {
+				p.progressCh <- LoadingProgress{Step: StepWeeklyStats, Done: true}
+			}
+		}()
 	}
+
+	wg.Wait()
 
 	// If both failed, return the notification error
 	if notifErr != nil && prErr != nil {

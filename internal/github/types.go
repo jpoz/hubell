@@ -37,7 +37,8 @@ type User struct {
 
 // SearchResult represents a GitHub search API response
 type SearchResult struct {
-	Items []SearchItem `json:"items"`
+	TotalCount int          `json:"total_count"`
+	Items      []SearchItem `json:"items"`
 }
 
 // SearchItem represents an item from the search API
@@ -45,6 +46,7 @@ type SearchItem struct {
 	Number         int            `json:"number"`
 	Title          string         `json:"title"`
 	HTMLURL        string         `json:"html_url"`
+	User           User           `json:"user"`
 	CreatedAt      time.Time      `json:"created_at"`
 	ClosedAt       *time.Time     `json:"closed_at"`
 	PullRequestRef PullRequestRef `json:"pull_request"`
@@ -161,4 +163,69 @@ type PRStatusChange struct {
 	URL       string
 	OldStatus PRStatus
 	NewStatus PRStatus
+}
+
+// OrgMember represents a member of a GitHub organization
+type OrgMember struct {
+	Login string `json:"login"`
+}
+
+// OrgMemberActivity holds aggregated activity stats for one org member
+type OrgMemberActivity struct {
+	Login     string
+	MergedPRs []MergedPRInfo
+	OpenPRs   []MergedPRInfo
+}
+
+// EngineerDetail holds the full drill-down data for a single engineer
+type EngineerDetail struct {
+	Login            string
+	MergedPRs        []DetailedMergedPR
+	OpenPRs          []DetailedOpenPR
+	ReviewedPRs      []ReviewedPRInfo
+	DailyActivity    [7]int // indexed by time.Weekday (0=Sun, 1=Mon, ..., 6=Sat)
+	AvgAdditions     int
+	AvgDeletions     int
+	AvgTimeToMerge   time.Duration
+	LongestPR        *DetailedMergedPR
+	ReposContributed []string
+	CommentsGiven    int
+	CommentsReceived int
+}
+
+// DetailedMergedPR contains a merged PR with diff stats and timing
+type DetailedMergedPR struct {
+	Owner       string
+	Repo        string
+	Number      int
+	Title       string
+	URL         string
+	MergedAt    time.Time
+	CreatedAt   time.Time
+	Additions   int
+	Deletions   int
+	TimeToMerge time.Duration
+}
+
+// DetailedOpenPR contains an open PR with diff stats
+type DetailedOpenPR struct {
+	Owner     string
+	Repo      string
+	Number    int
+	Title     string
+	URL       string
+	CreatedAt time.Time
+	Additions int
+	Deletions int
+	Age       time.Duration
+}
+
+// ReviewedPRInfo contains metadata about a PR reviewed by a user
+type ReviewedPRInfo struct {
+	Owner  string
+	Repo   string
+	Number int
+	Title  string
+	URL    string
+	Author string
 }

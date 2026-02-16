@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jpoz/hubell/internal/config"
 	"github.com/jpoz/hubell/internal/github"
@@ -142,10 +143,26 @@ type Model struct {
 
 	showDashboard  bool
 	dashboardStats DashboardStats
+
+	// Org activity overlay
+	showOrgDashboard   bool
+	orgName            string
+	orgMembers         []github.OrgMemberActivity
+	orgSelectedIndex   int
+	orgSortColumn      OrgSortColumn
+	orgLoading         bool
+	orgError           error
+	orgInput           textinput.Model
+	orgInputActive     bool
+	showEngineerDetail bool
+	engineerDetail     *github.EngineerDetail
+	engineerLoading    bool
+	engineerSelectedPR int
+	engineerScroll     int
 }
 
 // New creates a new TUI model
-func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollResult, progressCh <-chan github.LoadingProgress) *Model {
+func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollResult, progressCh <-chan github.LoadingProgress, orgName string) *Model {
 	ctx, cancel := context.WithCancel(ctx)
 
 	theme := GetTheme(config.LoadTheme())
@@ -172,6 +189,11 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 		dashStats.WeeklyMergedCounts[k] = v
 	}
 
+	ti := textinput.New()
+	ti.Placeholder = "organization name (e.g. angellist)"
+	ti.CharLimit = 100
+	ti.Width = 40
+
 	return &Model{
 		list:             l,
 		prList:           pl,
@@ -191,6 +213,8 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 		theme:            theme,
 		themeList:        buildThemeList(),
 		dashboardStats:   dashStats,
+		orgName:          orgName,
+		orgInput:         ti,
 	}
 }
 

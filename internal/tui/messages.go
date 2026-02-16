@@ -41,3 +41,18 @@ type BannerTickMsg struct{}
 type LoadingProgressMsg struct {
 	github.LoadingProgress
 }
+
+// OrgDataMsg delivers org overview data to the TUI
+type OrgDataMsg struct {
+	Members []github.OrgMemberActivity
+}
+
+// EngineerDetailMsg delivers drill-down data for a single engineer
+type EngineerDetailMsg struct {
+	Detail *github.EngineerDetail
+}
+
+// OrgErrorMsg reports an error from org data fetching
+type OrgErrorMsg struct {
+	Err error
+}
