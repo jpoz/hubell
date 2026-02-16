@@ -211,7 +211,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	return m, nil
+	// Forward unhandled keys to the focused list for navigation
+	var cmd tea.Cmd
+	if m.focusedPane == LeftPane {
+		m.list, cmd = m.list.Update(msg)
+	} else {
+		m.prList, cmd = m.prList.Update(msg)
+	}
+	return m, cmd
 }
 
 // handleOrgDashboardKey handles keyboard events in the org dashboard overlay.
