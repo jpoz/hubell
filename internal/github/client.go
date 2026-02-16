@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -576,4 +578,76 @@ func (c *Client) GetCommitStatus(ctx context.Context, owner, repo, sha string) (
 		TotalCount: totalCount,
 		Statuses:   allStatuses,
 	}, nil
+}
+
+// FetchCommentDetail fetches the comment or review at the given API URL and
+// returns a CommentDetail with author, body preview, type and review state.
+func (c *Client) FetchCommentDetail(ctx context.Context, commentURL string) (*CommentDetail, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", commentURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch comment detail: status %d", resp.StatusCode)
+	}
+
+	var raw struct {
+		User  User   `json:"user"`
+		Body  string `json:"body"`
+		State string `json:"state"` // reviews only: APPROVED, CHANGES_REQUESTED, COMMENTED, etc.
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode comment detail: %w", err)
+	}
+
+	return &CommentDetail{
+		Author:      raw.User.Login,
+		Body:        truncateBody(raw.Body, 80),
+		Type:        classifyCommentURL(commentURL),
+		ReviewState: strings.ToUpper(raw.State),
+	}, nil
+}
+
+// classifyCommentURL determines the comment type from the API URL pattern.
+func classifyCommentURL(url string) string {
+	switch {
+	case strings.Contains(url, "/pulls/comments/"):
+		return "review_comment"
+	case strings.Contains(url, "/reviews/"):
+		return "review"
+	default:
+		return "comment"
+	}
+}
+
+// truncateBody collapses whitespace and truncates to maxLen characters.
+func truncateBody(s string, maxLen int) string {
+	// Collapse newlines and runs of whitespace into single spaces
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	result := strings.TrimSpace(b.String())
+	if len(result) > maxLen {
+		return result[:maxLen] + "..."
+	}
+	return result
 }

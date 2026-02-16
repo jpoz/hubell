@@ -14,9 +14,18 @@ type Notification struct {
 
 // Subject represents the notification subject
 type Subject struct {
-	Title string `json:"title"`
-	Type  string `json:"type"`
-	URL   string `json:"url"`
+	Title            string `json:"title"`
+	Type             string `json:"type"`
+	URL              string `json:"url"`
+	LatestCommentURL string `json:"latest_comment_url"`
+}
+
+// CommentDetail holds enriched info about a notification's latest comment or review
+type CommentDetail struct {
+	Author      string
+	Body        string // truncated preview
+	Type        string // "comment", "review", "review_comment"
+	ReviewState string // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", etc.
 }
 
 // Repository represents the repository info

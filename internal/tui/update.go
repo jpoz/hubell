@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jpoz/hubell/internal/browser"
@@ -27,6 +28,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.PRInfos != nil {
 			m.prInfos = msg.PRInfos
+		}
+		if msg.CommentDetails != nil {
+			maps.Copy(m.commentDetails, msg.CommentDetails)
 		}
 		for _, change := range msg.PRChanges {
 			notify.SendDesktopNotification(

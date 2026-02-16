@@ -35,28 +35,31 @@ type PollResult struct {
 	PRChanges          []PRStatusChange
 	MergedPRs          []MergedPRInfo
 	WeeklyMergedCounts map[string]int // backfill: ISO week key → count (first poll only)
+	CommentDetails     map[string]*CommentDetail // keyed by notification ID
 	Error              error
 }
 
 // Poller polls GitHub notifications and open PR statuses at a regular interval
 type Poller struct {
-	client     *Client
-	interval   time.Duration
-	username   string
-	prStatuses map[string]PRStatus
-	prInfos    map[string]PRInfo
-	progressCh chan<- LoadingProgress
+	client         *Client
+	interval       time.Duration
+	username       string
+	prStatuses     map[string]PRStatus
+	prInfos        map[string]PRInfo
+	progressCh     chan<- LoadingProgress
+	commentDetails map[string]*CommentDetail // cache keyed by LatestCommentURL
 }
 
 // NewPoller creates a new poller
 func NewPoller(client *Client, interval time.Duration, username string, progressCh chan<- LoadingProgress) *Poller {
 	return &Poller{
-		client:     client,
-		interval:   interval,
-		username:   username,
-		prStatuses: make(map[string]PRStatus),
-		prInfos:    make(map[string]PRInfo),
-		progressCh: progressCh,
+		client:         client,
+		interval:       interval,
+		username:       username,
+		prStatuses:     make(map[string]PRStatus),
+		prInfos:        make(map[string]PRInfo),
+		progressCh:     progressCh,
+		commentDetails: make(map[string]*CommentDetail),
 	}
 }
 
@@ -173,10 +176,14 @@ func (p *Poller) poll(ctx context.Context, firstPoll bool) PollResult {
 		return PollResult{Error: notifErr}
 	}
 
+	// Enrich notifications with comment details
+	commentDetails := p.enrichNotifications(ctx, notifications)
+
 	var result PollResult
 	result.Notifications = notifications
 	result.MergedPRs = mergedPRs
 	result.WeeklyMergedCounts = weeklyMergedCounts
+	result.CommentDetails = commentDetails
 
 	if prStatuses != nil {
 		// Detect CI status changes (skip on first poll to establish baseline)
@@ -210,6 +217,82 @@ func (p *Poller) poll(ctx context.Context, firstPoll bool) PollResult {
 
 		result.PRInfos = make(map[string]PRInfo, len(prInfos))
 		maps.Copy(result.PRInfos, prInfos)
+	}
+
+	return result
+}
+
+// enrichNotifications concurrently fetches comment details for notifications
+// that have a LatestCommentURL. Results are cached by URL to avoid redundant
+// requests. Returns a map keyed by notification ID.
+func (p *Poller) enrichNotifications(ctx context.Context, notifications []*Notification) map[string]*CommentDetail {
+	if len(notifications) == 0 {
+		return nil
+	}
+
+	// Identify notifications that need fetching (not yet cached)
+	type fetchItem struct {
+		notifID string
+		url     string
+	}
+	var toFetch []fetchItem
+	result := make(map[string]*CommentDetail)
+
+	activeURLs := make(map[string]struct{})
+	for _, n := range notifications {
+		url := n.Subject.LatestCommentURL
+		if url == "" {
+			continue
+		}
+		activeURLs[url] = struct{}{}
+		if detail, ok := p.commentDetails[url]; ok {
+			result[n.ID] = detail
+		} else {
+			toFetch = append(toFetch, fetchItem{notifID: n.ID, url: url})
+		}
+	}
+
+	// Evict stale cache entries
+	for url := range p.commentDetails {
+		if _, ok := activeURLs[url]; !ok {
+			delete(p.commentDetails, url)
+		}
+	}
+
+	if len(toFetch) == 0 {
+		return result
+	}
+
+	// Fetch concurrently with a semaphore of 5
+	type fetchResult struct {
+		notifID string
+		url     string
+		detail  *CommentDetail
+	}
+	resultCh := make(chan fetchResult, len(toFetch))
+	sem := make(chan struct{}, 5)
+
+	var wg sync.WaitGroup
+	for _, item := range toFetch {
+		wg.Add(1)
+		go func(fi fetchItem) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			detail, err := p.client.FetchCommentDetail(ctx, fi.url)
+			if err != nil {
+				return
+			}
+			resultCh <- fetchResult{notifID: fi.notifID, url: fi.url, detail: detail}
+		}(item)
+	}
+	wg.Wait()
+	close(resultCh)
+
+	for fr := range resultCh {
+		p.commentDetails[fr.url] = fr.detail
+		result[fr.notifID] = fr.detail
 	}
 
 	return result

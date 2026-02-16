@@ -22,8 +22,9 @@ var bannerText string
 
 // NotificationItem implements list.Item for the bubbles list
 type NotificationItem struct {
-	notification *github.Notification
-	ciStatus     github.PRStatus
+	notification  *github.Notification
+	ciStatus      github.PRStatus
+	commentDetail *github.CommentDetail
 }
 
 // FilterValue implements list.Item
@@ -57,9 +58,69 @@ func (i NotificationItem) Title() string {
 
 // Description implements list.DefaultItem
 func (i NotificationItem) Description() string {
-	elapsed := time.Since(i.notification.UpdatedAt)
-	timeStr := formatDuration(elapsed)
-	return fmt.Sprintf("%s | Updated: %s", i.notification.Reason, timeStr)
+	timeStr := formatDuration(time.Since(i.notification.UpdatedAt))
+
+	d := i.commentDetail
+	if d == nil {
+		return fmt.Sprintf("%s · %s", formatReason(i.notification.Reason), timeStr)
+	}
+
+	switch d.Type {
+	case "review":
+		switch d.ReviewState {
+		case "APPROVED":
+			return fmt.Sprintf("@%s approved · %s", d.Author, timeStr)
+		case "CHANGES_REQUESTED":
+			return fmt.Sprintf("@%s requested changes · %s", d.Author, timeStr)
+		case "COMMENTED":
+			return fmt.Sprintf("@%s reviewed · %s", d.Author, timeStr)
+		default:
+			if d.Author != "" {
+				return fmt.Sprintf("@%s reviewed · %s", d.Author, timeStr)
+			}
+		}
+	case "comment", "review_comment":
+		if d.Author != "" && d.Body != "" {
+			return fmt.Sprintf("@%s: \"%s\" · %s", d.Author, d.Body, timeStr)
+		}
+		if d.Author != "" {
+			return fmt.Sprintf("@%s commented · %s", d.Author, timeStr)
+		}
+	}
+
+	return fmt.Sprintf("%s · %s", formatReason(i.notification.Reason), timeStr)
+}
+
+// formatReason maps raw notification reason strings to human-readable labels.
+func formatReason(reason string) string {
+	switch reason {
+	case "assign":
+		return "You were assigned"
+	case "author":
+		return "Activity on your PR"
+	case "comment":
+		return "New comment"
+	case "ci_activity":
+		return "CI activity"
+	case "invitation":
+		return "Repo invitation"
+	case "manual":
+		return "Subscribed"
+	case "mention":
+		return "You were mentioned"
+	case "review_requested":
+		return "Review requested"
+	case "security_alert":
+		return "Security alert"
+	case "state_change":
+		return "State changed"
+	case "subscribed":
+		return "Watching"
+	case "team_mention":
+		return "Team mentioned"
+	default:
+		return reason
+	}
 }
 
 // PRItem implements list.Item for the PR list pane
@@ -125,6 +186,7 @@ type Model struct {
 	notificationMap  map[string]*github.Notification
 	prStatuses       map[string]github.PRStatus
 	prInfos          map[string]github.PRInfo
+	commentDetails   map[string]*github.CommentDetail
 	lastNotifyCount  int
 	filterMode       FilterMode
 	focusedPane      Pane
@@ -206,6 +268,7 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 		notificationMap:  make(map[string]*github.Notification),
 		prStatuses:       make(map[string]github.PRStatus),
 		prInfos:          make(map[string]github.PRInfo),
+		commentDetails:   make(map[string]*github.CommentDetail),
 		filterMode:       FilterMyPRs,
 		focusedPane:      LeftPane,
 		loading:          true,
@@ -266,6 +329,7 @@ func waitForPollResult(pollCh <-chan github.PollResult) tea.Cmd {
 			PRChanges:          result.PRChanges,
 			MergedPRs:          result.MergedPRs,
 			WeeklyMergedCounts: result.WeeklyMergedCounts,
+			CommentDetails:     result.CommentDetails,
 		}
 	}
 }
@@ -324,12 +388,13 @@ func (m *Model) updateNotifications(incoming []*github.Notification) {
 		m.notificationMap[n.ID] = n
 	}
 
-	// Convert to list items with CI status
+	// Convert to list items with CI status and comment detail
 	items := make([]list.Item, len(m.notifications))
 	for i, n := range m.notifications {
 		items[i] = NotificationItem{
-			notification: n,
-			ciStatus:     m.prStatusForNotification(n),
+			notification:  n,
+			ciStatus:      m.prStatusForNotification(n),
+			commentDetail: m.commentDetails[n.ID],
 		}
 	}
 	m.list.SetItems(items)
