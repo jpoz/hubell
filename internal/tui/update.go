@@ -41,6 +41,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dashboardStats.updateFromPollResult(msg.MergedPRs, msg.WeeklyMergedCounts, msg.PRInfos)
 		m.updateNotifications(msg.Notifications)
 		m.updatePRList()
+		m.updateTimelineList()
 		return m, waitForPollResult(m.pollCh)
 
 	case LoadingProgressMsg:
@@ -76,6 +77,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.orgMembers = msg.Members
 		m.orgSelectedIndex = 0
 		m.sortOrgMembers()
+		m.updateTimelineList()
 		return m, nil
 
 	case EngineerDetailMsg:
@@ -97,10 +99,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Pass to the focused list for navigation
 	var cmd tea.Cmd
-	if m.focusedPane == LeftPane {
+	switch m.focusedPane {
+	case LeftPane:
 		m.list, cmd = m.list.Update(msg)
-	} else {
+	case RightPane:
 		m.prList, cmd = m.prList.Update(msg)
+	case TimelinePane:
+		m.timelineList, cmd = m.timelineList.Update(msg)
 	}
 	return m, cmd
 }
@@ -175,24 +180,27 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "tab":
-		if m.focusedPane == LeftPane {
-			m.focusedPane = RightPane
-		} else {
-			m.focusedPane = LeftPane
-		}
+		m.focusedPane = (m.focusedPane + 1) % paneCount
 		return m, nil
 
 	case "enter":
-		if m.focusedPane == LeftPane {
+		switch m.focusedPane {
+		case LeftPane:
 			if selectedItem, ok := m.list.SelectedItem().(NotificationItem); ok {
 				webURL := github.ConvertAPIURLToWeb(selectedItem.notification.Subject.URL)
 				if err := browser.Open(webURL); err != nil {
 					m.err = err
 				}
 			}
-		} else {
+		case RightPane:
 			if selectedItem, ok := m.prList.SelectedItem().(PRItem); ok {
 				if err := browser.Open(selectedItem.info.URL); err != nil {
+					m.err = err
+				}
+			}
+		case TimelinePane:
+			if selectedItem, ok := m.timelineList.SelectedItem().(TimelineEvent); ok {
+				if err := browser.Open(selectedItem.URL); err != nil {
 					m.err = err
 				}
 			}
@@ -217,10 +225,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Forward unhandled keys to the focused list for navigation
 	var cmd tea.Cmd
-	if m.focusedPane == LeftPane {
+	switch m.focusedPane {
+	case LeftPane:
 		m.list, cmd = m.list.Update(msg)
-	} else {
+	case RightPane:
 		m.prList, cmd = m.prList.Update(msg)
+	case TimelinePane:
+		m.timelineList, cmd = m.timelineList.Update(msg)
 	}
 	return m, cmd
 }

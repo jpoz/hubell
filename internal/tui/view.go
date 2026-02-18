@@ -65,41 +65,55 @@ func (m *Model) View() string {
 		errorBanner = m.errorStyle().Render(fmt.Sprintf("⚠ Error: %s", m.err)) + "\n"
 	}
 
-	// Calculate pane widths (subtract 2 per pane for border)
-	leftWidth := m.width / 2
-	rightWidth := m.width - leftWidth
+	// Calculate pane widths: 30% timeline / 35% notifications / 35% PRs
+	tlWidth := m.width * 30 / 100
+	notiWidth := m.width * 35 / 100
+	prWidth := m.width - tlWidth - notiWidth
 
 	// Height for list content (minus error banner, help, borders)
 	listHeight := m.height - 5
 
-	// Build left pane (notifications)
-	leftContentWidth := max(leftWidth-2, 0)
-	leftContentHeight := max(listHeight-2, 0)
-	m.list.SetSize(leftContentWidth, leftContentHeight)
-	leftStyle := m.unfocusedPaneStyle()
-	if m.focusedPane == LeftPane {
-		leftStyle = m.focusedPaneStyle()
+	// Build timeline pane (left)
+	tlContentWidth := max(tlWidth-2, 0)
+	tlContentHeight := max(listHeight-2, 0)
+	m.timelineList.SetSize(tlContentWidth, tlContentHeight)
+	tlStyle := m.unfocusedPaneStyle()
+	if m.focusedPane == TimelinePane {
+		tlStyle = m.focusedPaneStyle()
 	}
-	leftPane := leftStyle.
-		Width(leftContentWidth).
-		Height(leftContentHeight).
+	timelinePane := tlStyle.
+		Width(tlContentWidth).
+		Height(tlContentHeight).
+		Render(m.timelineList.View())
+
+	// Build notifications pane (middle)
+	notiContentWidth := max(notiWidth-2, 0)
+	notiContentHeight := max(listHeight-2, 0)
+	m.list.SetSize(notiContentWidth, notiContentHeight)
+	notiStyle := m.unfocusedPaneStyle()
+	if m.focusedPane == LeftPane {
+		notiStyle = m.focusedPaneStyle()
+	}
+	notiPane := notiStyle.
+		Width(notiContentWidth).
+		Height(notiContentHeight).
 		Render(m.list.View())
 
-	// Build right pane (open PRs)
-	rightContentWidth := max(rightWidth-2, 0)
-	rightContentHeight := max(listHeight-2, 0)
-	m.prList.SetSize(rightContentWidth, rightContentHeight)
-	rightStyle := m.unfocusedPaneStyle()
+	// Build PRs pane (right)
+	prContentWidth := max(prWidth-2, 0)
+	prContentHeight := max(listHeight-2, 0)
+	m.prList.SetSize(prContentWidth, prContentHeight)
+	prStyle := m.unfocusedPaneStyle()
 	if m.focusedPane == RightPane {
-		rightStyle = m.focusedPaneStyle()
+		prStyle = m.focusedPaneStyle()
 	}
-	rightPane := rightStyle.
-		Width(rightContentWidth).
-		Height(rightContentHeight).
+	prPane := prStyle.
+		Width(prContentWidth).
+		Height(prContentHeight).
 		Render(m.prList.View())
 
 	// Combine panes horizontally
-	panes := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	panes := lipgloss.JoinHorizontal(lipgloss.Top, timelinePane, notiPane, prPane)
 
 	// Help text
 	help := m.helpStyle().Render(fmt.Sprintf("tab: switch pane | enter: open | r: mark read | f: filter [%s] | d: dashboard | o: org | t: theme | q: quit | /: search", m.filterMode))

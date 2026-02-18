@@ -52,6 +52,7 @@ func pollAllPRs(ctx context.Context, client *Client, username string, progressCh
 
 			pr, err := client.GetPullRequest(ctx, owner, repo, item.Number)
 			if err == nil {
+				info.Branch = pr.Head.Ref
 				info.Additions = pr.Additions
 				info.Deletions = pr.Deletions
 

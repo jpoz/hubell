@@ -131,12 +131,17 @@ func (d PRDelegate) Render(w io.Writer, m list.Model, index int, item list.Item)
 
 	titleLine := strings.Join(segments, "")
 
-	// Description line (PR title)
+	// Description line (branch name + PR title)
 	descColor := d.theme.NormalDesc
 	if selected {
 		descColor = d.theme.SelectedDesc
 	}
-	descLine := lipgloss.NewStyle().Foreground(descColor).Render(prItem.info.Title)
+	var descParts []string
+	if prItem.info.Branch != "" {
+		descParts = append(descParts, lipgloss.NewStyle().Foreground(d.theme.Subtle).Render(prItem.info.Branch))
+	}
+	descParts = append(descParts, lipgloss.NewStyle().Foreground(descColor).Render(prItem.info.Title))
+	descLine := strings.Join(descParts, " ")
 
 	// Truncate lines to fit available width (account for padding/border)
 	contentWidth := width - 4
