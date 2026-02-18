@@ -33,6 +33,11 @@ type Theme struct {
 	NormalForeground   lipgloss.Color
 	NormalDesc         lipgloss.Color
 
+	// Timeline event colors
+	TimelineCreated  lipgloss.Color
+	TimelineApproved lipgloss.Color
+	TimelineMerged   lipgloss.Color
+
 	// General
 	Accent lipgloss.Color
 	Subtle lipgloss.Color
@@ -57,6 +62,9 @@ var themes = map[string]Theme{
 		SelectedDesc:       lipgloss.Color("246"),
 		NormalForeground:   lipgloss.Color("255"),
 		NormalDesc:         lipgloss.Color("241"),
+		TimelineCreated:    lipgloss.Color("33"),
+		TimelineApproved:   lipgloss.Color("42"),
+		TimelineMerged:     lipgloss.Color("135"),
 		Accent:             lipgloss.Color("62"),
 		Subtle:             lipgloss.Color("241"),
 	},
@@ -77,6 +85,9 @@ var themes = map[string]Theme{
 		SelectedDesc:       lipgloss.Color("#D8DEE9"),
 		NormalForeground:   lipgloss.Color("#ECEFF4"),
 		NormalDesc:         lipgloss.Color("#4C566A"),
+		TimelineCreated:    lipgloss.Color("#81A1C1"),
+		TimelineApproved:   lipgloss.Color("#A3BE8C"),
+		TimelineMerged:     lipgloss.Color("#B48EAD"),
 		Accent:             lipgloss.Color("#88C0D0"),
 		Subtle:             lipgloss.Color("#4C566A"),
 	},
@@ -97,6 +108,9 @@ var themes = map[string]Theme{
 		SelectedDesc:       lipgloss.Color("#F8F8F2"),
 		NormalForeground:   lipgloss.Color("#F8F8F2"),
 		NormalDesc:         lipgloss.Color("#6272A4"),
+		TimelineCreated:    lipgloss.Color("#8BE9FD"),
+		TimelineApproved:   lipgloss.Color("#50FA7B"),
+		TimelineMerged:     lipgloss.Color("#BD93F9"),
 		Accent:             lipgloss.Color("#BD93F9"),
 		Subtle:             lipgloss.Color("#6272A4"),
 	},
@@ -117,6 +131,9 @@ var themes = map[string]Theme{
 		SelectedDesc:       lipgloss.Color("#CDD6F4"),
 		NormalForeground:   lipgloss.Color("#CDD6F4"),
 		NormalDesc:         lipgloss.Color("#585B70"),
+		TimelineCreated:    lipgloss.Color("#89B4FA"),
+		TimelineApproved:   lipgloss.Color("#A6E3A1"),
+		TimelineMerged:     lipgloss.Color("#CBA6F7"),
 		Accent:             lipgloss.Color("#CBA6F7"),
 		Subtle:             lipgloss.Color("#585B70"),
 	},
@@ -137,6 +154,9 @@ var themes = map[string]Theme{
 		SelectedDesc:       lipgloss.Color("#93A1A1"),
 		NormalForeground:   lipgloss.Color("#FDF6E3"),
 		NormalDesc:         lipgloss.Color("#586E75"),
+		TimelineCreated:    lipgloss.Color("#268BD2"),
+		TimelineApproved:   lipgloss.Color("#859900"),
+		TimelineMerged:     lipgloss.Color("#6C71C4"),
 		Accent:             lipgloss.Color("#268BD2"),
 		Subtle:             lipgloss.Color("#586E75"),
 	},
@@ -157,6 +177,9 @@ var themes = map[string]Theme{
 		SelectedDesc:       lipgloss.Color("#EBDBB2"),
 		NormalForeground:   lipgloss.Color("#EBDBB2"),
 		NormalDesc:         lipgloss.Color("#665C54"),
+		TimelineCreated:    lipgloss.Color("#83A598"),
+		TimelineApproved:   lipgloss.Color("#B8BB26"),
+		TimelineMerged:     lipgloss.Color("#D3869B"),
 		Accent:             lipgloss.Color("#FE8019"),
 		Subtle:             lipgloss.Color("#665C54"),
 	},
@@ -177,6 +200,9 @@ var themes = map[string]Theme{
 		SelectedDesc:       lipgloss.Color("#C0CAF5"),
 		NormalForeground:   lipgloss.Color("#C0CAF5"),
 		NormalDesc:         lipgloss.Color("#565F89"),
+		TimelineCreated:    lipgloss.Color("#7AA2F7"),
+		TimelineApproved:   lipgloss.Color("#9ECE6A"),
+		TimelineMerged:     lipgloss.Color("#BB9AF7"),
 		Accent:             lipgloss.Color("#7AA2F7"),
 		Subtle:             lipgloss.Color("#565F89"),
 	},
@@ -197,6 +223,9 @@ var themes = map[string]Theme{
 		SelectedDesc:       lipgloss.Color("#E0DEF4"),
 		NormalForeground:   lipgloss.Color("#E0DEF4"),
 		NormalDesc:         lipgloss.Color("#6E6A86"),
+		TimelineCreated:    lipgloss.Color("#9CCFD8"),
+		TimelineApproved:   lipgloss.Color("#31748F"),
+		TimelineMerged:     lipgloss.Color("#C4A7E7"),
 		Accent:             lipgloss.Color("#C4A7E7"),
 		Subtle:             lipgloss.Color("#6E6A86"),
 	},
@@ -286,6 +315,11 @@ func (m *Model) applyTheme(name string) {
 	pd := newPRDelegate(m.theme)
 	m.prList.SetDelegate(pd)
 	applyListTheme(&m.prList, m.theme)
+
+	// Re-theme timeline list
+	td := newTimelineDelegate(m.theme)
+	m.timelineList.SetDelegate(td)
+	applyListTheme(&m.timelineList, m.theme)
 
 	// Rebuild theme list so it picks up new styling
 	m.themeList = buildThemeList()

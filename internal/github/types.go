@@ -78,6 +78,7 @@ type PullRequest struct {
 
 // PRHead represents the head ref of a pull request
 type PRHead struct {
+	Ref string `json:"ref"`
 	SHA string `json:"sha"`
 }
 
@@ -116,6 +117,7 @@ type PRInfo struct {
 	Repo        string
 	Number      int
 	Title       string
+	Branch      string
 	URL         string
 	CreatedAt   time.Time
 	ReviewState PRReviewState
@@ -127,12 +129,14 @@ type PRInfo struct {
 
 // MergedPRInfo contains metadata about a merged pull request
 type MergedPRInfo struct {
-	Owner    string
-	Repo     string
-	Number   int
-	Title    string
-	URL      string
-	MergedAt time.Time
+	Owner     string
+	Repo      string
+	Number    int
+	Title     string
+	URL       string
+	Author    string
+	CreatedAt time.Time
+	MergedAt  time.Time
 }
 
 // PRReviewState represents the aggregate review approval state of a PR

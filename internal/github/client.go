@@ -332,12 +332,14 @@ func (c *Client) SearchMergedPRsThisWeek(ctx context.Context, username string) (
 			mergedAt = *item.ClosedAt
 		}
 		merged = append(merged, MergedPRInfo{
-			Owner:    owner,
-			Repo:     repo,
-			Number:   item.Number,
-			Title:    item.Title,
-			URL:      item.HTMLURL,
-			MergedAt: mergedAt,
+			Owner:     owner,
+			Repo:      repo,
+			Number:    item.Number,
+			Title:     item.Title,
+			URL:       item.HTMLURL,
+			Author:    item.User.Login,
+			CreatedAt: item.CreatedAt,
+			MergedAt:  mergedAt,
 		})
 	}
 
@@ -385,12 +387,14 @@ func (c *Client) SearchMergedPRsSince(ctx context.Context, username string, sinc
 			mergedAt = *item.ClosedAt
 		}
 		merged = append(merged, MergedPRInfo{
-			Owner:    owner,
-			Repo:     repo,
-			Number:   item.Number,
-			Title:    item.Title,
-			URL:      item.HTMLURL,
-			MergedAt: mergedAt,
+			Owner:     owner,
+			Repo:      repo,
+			Number:    item.Number,
+			Title:     item.Title,
+			URL:       item.HTMLURL,
+			Author:    item.User.Login,
+			CreatedAt: item.CreatedAt,
+			MergedAt:  mergedAt,
 		})
 	}
 

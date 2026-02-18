@@ -149,12 +149,14 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 			mergedAt = *item.ClosedAt
 		}
 		a.MergedPRs = append(a.MergedPRs, MergedPRInfo{
-			Owner:    owner,
-			Repo:     repo,
-			Number:   item.Number,
-			Title:    item.Title,
-			URL:      item.HTMLURL,
-			MergedAt: mergedAt,
+			Owner:     owner,
+			Repo:      repo,
+			Number:    item.Number,
+			Title:     item.Title,
+			URL:       item.HTMLURL,
+			Author:    login,
+			CreatedAt: item.CreatedAt,
+			MergedAt:  mergedAt,
 		})
 	}
 
@@ -170,11 +172,13 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 		}
 		owner, repo := parseRepoURL(item.RepositoryURL)
 		a.OpenPRs = append(a.OpenPRs, MergedPRInfo{
-			Owner:  owner,
-			Repo:   repo,
-			Number: item.Number,
-			Title:  item.Title,
-			URL:    item.HTMLURL,
+			Owner:     owner,
+			Repo:      repo,
+			Number:    item.Number,
+			Title:     item.Title,
+			URL:       item.HTMLURL,
+			Author:    login,
+			CreatedAt: item.CreatedAt,
 		})
 	}
 

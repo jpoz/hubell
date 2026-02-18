@@ -144,12 +144,40 @@ func (i PRItem) Description() string {
 	return i.info.Title
 }
 
+// TimelineEventType identifies the kind of timeline event.
+type TimelineEventType int
+
+const (
+	TimelineEventCreated TimelineEventType = iota
+	TimelineEventApproved
+	TimelineEventMerged
+)
+
+// TimelineEvent represents a single chronological event for the timeline pane.
+type TimelineEvent struct {
+	EventType TimelineEventType
+	Timestamp time.Time
+	Owner     string
+	Repo      string
+	Number    int
+	Title     string
+	URL       string
+	Actor     string
+}
+
+// FilterValue implements list.Item.
+func (e TimelineEvent) FilterValue() string {
+	return e.Title
+}
+
 // Pane identifies which pane has keyboard focus
 type Pane int
 
 const (
-	LeftPane Pane = iota
+	TimelinePane Pane = iota
+	LeftPane
 	RightPane
+	paneCount // used for modular tab cycling
 )
 
 // FilterMode controls which notifications are displayed
@@ -177,6 +205,7 @@ func (f FilterMode) String() string {
 type Model struct {
 	list             list.Model
 	prList           list.Model
+	timelineList     list.Model
 	githubClient     *github.Client
 	pollCh           <-chan github.PollResult
 	ctx              context.Context
@@ -245,6 +274,14 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 	pl.SetFilteringEnabled(true)
 	applyListTheme(&pl, theme)
 
+	// Initialize timeline list with custom delegate
+	tlDelegate := newTimelineDelegate(theme)
+	tl := list.New([]list.Item{}, tlDelegate, 0, 0)
+	tl.Title = "Timeline"
+	tl.SetShowStatusBar(false)
+	tl.SetFilteringEnabled(true)
+	applyListTheme(&tl, theme)
+
 	dashStats := newDashboardStats()
 	cached := config.LoadWeeklyStats()
 	for k, v := range cached.Weeks {
@@ -259,6 +296,7 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 	return &Model{
 		list:             l,
 		prList:           pl,
+		timelineList:     tl,
 		githubClient:     client,
 		pollCh:           pollCh,
 		progressCh:       progressCh,
@@ -270,7 +308,7 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 		prInfos:          make(map[string]github.PRInfo),
 		commentDetails:   make(map[string]*github.CommentDetail),
 		filterMode:       FilterMyPRs,
-		focusedPane:      LeftPane,
+		focusedPane:      TimelinePane,
 		loading:          true,
 		loadingSteps:     make(map[github.LoadingStep]bool),
 		theme:            theme,
@@ -283,12 +321,18 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 
 // Init implements tea.Model
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		waitForPollResult(m.pollCh),
 		waitForLoadingStep(m.progressCh),
 		tea.EnterAltScreen,
 		bannerTick(),
-	)
+	}
+	// Auto-fetch org data for the timeline when an org is configured
+	if m.orgName != "" {
+		m.orgLoading = true
+		cmds = append(cmds, fetchOrgData(m.ctx, m.githubClient, m.orgName))
+	}
+	return tea.Batch(cmds...)
 }
 
 // waitForLoadingStep reads the next loading progress update from the progress channel
@@ -432,6 +476,101 @@ func (m *Model) updatePRList() {
 		return items[i].(PRItem).info.CreatedAt.After(items[j].(PRItem).info.CreatedAt)
 	})
 	m.prList.SetItems(items)
+}
+
+// buildTimelineEvents derives timeline events from org-wide data when
+// available, falling back to the authenticated user's data otherwise.
+func (m *Model) buildTimelineEvents() []TimelineEvent {
+	var events []TimelineEvent
+
+	if len(m.orgMembers) > 0 {
+		// Org-wide timeline: created + merged from all members
+		for _, member := range m.orgMembers {
+			for _, pr := range member.OpenPRs {
+				events = append(events, TimelineEvent{
+					EventType: TimelineEventCreated,
+					Timestamp: pr.CreatedAt,
+					Owner:     pr.Owner,
+					Repo:      pr.Repo,
+					Number:    pr.Number,
+					Title:     pr.Title,
+					URL:       pr.URL,
+					Actor:     member.Login,
+				})
+			}
+			for _, pr := range member.MergedPRs {
+				events = append(events, TimelineEvent{
+					EventType: TimelineEventMerged,
+					Timestamp: pr.MergedAt,
+					Owner:     pr.Owner,
+					Repo:      pr.Repo,
+					Number:    pr.Number,
+					Title:     pr.Title,
+					URL:       pr.URL,
+					Actor:     member.Login,
+				})
+			}
+		}
+	} else {
+		// Fallback: user-scoped data
+		for _, info := range m.prInfos {
+			events = append(events, TimelineEvent{
+				EventType: TimelineEventCreated,
+				Timestamp: info.CreatedAt,
+				Owner:     info.Owner,
+				Repo:      info.Repo,
+				Number:    info.Number,
+				Title:     info.Title,
+				URL:       info.URL,
+			})
+		}
+		for _, pr := range m.dashboardStats.MergedPRs {
+			events = append(events, TimelineEvent{
+				EventType: TimelineEventMerged,
+				Timestamp: pr.MergedAt,
+				Owner:     pr.Owner,
+				Repo:      pr.Repo,
+				Number:    pr.Number,
+				Title:     pr.Title,
+				URL:       pr.URL,
+			})
+		}
+	}
+
+	// Approved events from user's PRs reviews (always available)
+	for _, info := range m.prInfos {
+		for _, r := range info.Reviews {
+			if r.State == "APPROVED" {
+				events = append(events, TimelineEvent{
+					EventType: TimelineEventApproved,
+					Timestamp: r.SubmittedAt,
+					Owner:     info.Owner,
+					Repo:      info.Repo,
+					Number:    info.Number,
+					Title:     info.Title,
+					URL:       info.URL,
+					Actor:     r.User.Login,
+				})
+			}
+		}
+	}
+
+	// Sort most-recent-first
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp.After(events[j].Timestamp)
+	})
+
+	return events
+}
+
+// updateTimelineList rebuilds the timeline pane from current data.
+func (m *Model) updateTimelineList() {
+	events := m.buildTimelineEvents()
+	items := make([]list.Item, len(events))
+	for i, e := range events {
+		items[i] = e
+	}
+	m.timelineList.SetItems(items)
 }
 
 // prAPIURLPattern matches GitHub API PR URLs like
