@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -143,14 +145,44 @@ func (c *Client) GetAuthenticatedUser(ctx context.Context) (*User, error) {
 // SearchUserOpenPRs fetches all open pull requests created by the authenticated user.
 // It merges results from /user/issues (which includes private repos when the token has
 // repo scope) and the search API (which includes PRs on repos where the user is not a
-// member, e.g. open source contributions via forks).
+// member, e.g. open source contributions via forks). Both sources are queried concurrently.
 func (c *Client) SearchUserOpenPRs(ctx context.Context, username string) (*SearchResult, error) {
+	type sourceResult struct {
+		items []SearchItem
+		err   error
+	}
+
+	userCh := make(chan sourceResult, 1)
+	searchCh := make(chan sourceResult, 1)
+
+	// /user/issues covers private repos where the user is a collaborator/member
+	go func() {
+		result, err := c.listUserOpenPRs(ctx)
+		if err != nil {
+			userCh <- sourceResult{err: err}
+		} else {
+			userCh <- sourceResult{items: result.Items}
+		}
+	}()
+
+	// Search API covers external repos (forks, open source contributions)
+	go func() {
+		result, err := c.searchUserOpenPRs(ctx, username)
+		if err != nil {
+			searchCh <- sourceResult{err: err}
+		} else {
+			searchCh <- sourceResult{items: result.Items}
+		}
+	}()
+
+	ur := <-userCh
+	sr := <-searchCh
+
 	seen := make(map[string]struct{})
 	var allItems []SearchItem
 
-	// /user/issues covers private repos where the user is a collaborator/member
-	if result, err := c.listUserOpenPRs(ctx); err == nil {
-		for _, item := range result.Items {
+	if ur.err == nil {
+		for _, item := range ur.items {
 			key := item.HTMLURL
 			if _, ok := seen[key]; !ok {
 				seen[key] = struct{}{}
@@ -159,9 +191,8 @@ func (c *Client) SearchUserOpenPRs(ctx context.Context, username string) (*Searc
 		}
 	}
 
-	// Search API covers external repos (forks, open source contributions)
-	if result, err := c.searchUserOpenPRs(ctx, username); err == nil {
-		for _, item := range result.Items {
+	if sr.err == nil {
+		for _, item := range sr.items {
 			key := item.HTMLURL
 			if _, ok := seen[key]; !ok {
 				seen[key] = struct{}{}
@@ -255,6 +286,117 @@ func (c *Client) searchUserOpenPRs(ctx context.Context, username string) (*Searc
 	return &result, nil
 }
 
+// SearchMergedPRsThisWeek fetches PRs merged by the user since the start of the current week (Monday).
+func (c *Client) SearchMergedPRsThisWeek(ctx context.Context, username string) ([]MergedPRInfo, error) {
+	now := time.Now()
+	weekday := now.Weekday()
+	if weekday == time.Sunday {
+		weekday = 7
+	}
+	monday := now.AddDate(0, 0, -int(weekday-time.Monday))
+	mondayStr := monday.Format("2006-01-02")
+
+	q := fmt.Sprintf("author:%s+type:pr+is:merged+merged:>=%s", username, mondayStr)
+	u := fmt.Sprintf("%s/search/issues?q=%s&sort=updated&order=desc&per_page=30", baseURL, q)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search merged PRs: status %d", resp.StatusCode)
+	}
+
+	var result SearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode merged PR search: %w", err)
+	}
+
+	var merged []MergedPRInfo
+	for _, item := range result.Items {
+		owner, repo := parseRepoURL(item.RepositoryURL)
+		if owner == "" || repo == "" {
+			continue
+		}
+		mergedAt := time.Time{}
+		if item.ClosedAt != nil {
+			mergedAt = *item.ClosedAt
+		}
+		merged = append(merged, MergedPRInfo{
+			Owner:    owner,
+			Repo:     repo,
+			Number:   item.Number,
+			Title:    item.Title,
+			URL:      item.HTMLURL,
+			MergedAt: mergedAt,
+		})
+	}
+
+	return merged, nil
+}
+
+// SearchMergedPRsSince fetches PRs merged by the user since the given date.
+// Uses per_page=100 to cover typical 12-week history in a single request.
+func (c *Client) SearchMergedPRsSince(ctx context.Context, username string, since time.Time) ([]MergedPRInfo, error) {
+	sinceStr := since.Format("2006-01-02")
+
+	q := fmt.Sprintf("author:%s+type:pr+is:merged+merged:>=%s", username, sinceStr)
+	u := fmt.Sprintf("%s/search/issues?q=%s&sort=updated&order=desc&per_page=100", baseURL, q)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search merged PRs since %s: status %d", sinceStr, resp.StatusCode)
+	}
+
+	var result SearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode merged PR search: %w", err)
+	}
+
+	var merged []MergedPRInfo
+	for _, item := range result.Items {
+		owner, repo := parseRepoURL(item.RepositoryURL)
+		if owner == "" || repo == "" {
+			continue
+		}
+		mergedAt := time.Time{}
+		if item.ClosedAt != nil {
+			mergedAt = *item.ClosedAt
+		}
+		merged = append(merged, MergedPRInfo{
+			Owner:    owner,
+			Repo:     repo,
+			Number:   item.Number,
+			Title:    item.Title,
+			URL:      item.HTMLURL,
+			MergedAt: mergedAt,
+		})
+	}
+
+	return merged, nil
+}
+
 // GetPullRequest fetches a specific pull request
 func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", baseURL, owner, repo, number)
@@ -313,11 +455,135 @@ func (c *Client) GetPullRequestReviews(ctx context.Context, owner, repo string, 
 	return reviews, nil
 }
 
-// GetCheckRuns fetches check runs for a given commit SHA
-func (c *Client) GetCheckRuns(ctx context.Context, owner, repo, sha string) (*CheckRunsResponse, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs", baseURL, owner, repo, sha)
+// GetIssueComments fetches comments on an issue or pull request.
+func (c *Client) GetIssueComments(ctx context.Context, owner, repo string, number int, since time.Time) ([]IssueComment, error) {
+	sinceStr := since.Format(time.RFC3339)
+	u := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments?since=%s&per_page=100", baseURL, owner, repo, number, sinceStr)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get issue comments: status %d", resp.StatusCode)
+	}
+
+	var comments []IssueComment
+	if err := json.NewDecoder(resp.Body).Decode(&comments); err != nil {
+		return nil, fmt.Errorf("decode issue comments: %w", err)
+	}
+
+	return comments, nil
+}
+
+// GetCheckRuns fetches all check runs for a given commit SHA, paginating
+// through all pages to ensure none are missed.
+func (c *Client) GetCheckRuns(ctx context.Context, owner, repo, sha string) (*CheckRunsResponse, error) {
+	var allCheckRuns []CheckRun
+	totalCount := 0
+
+	for page := 1; ; page++ {
+		pageURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs?per_page=100&page=%d", baseURL, owner, repo, sha, page)
+
+		req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		c.setHeaders(req)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		}
+
+		var result CheckRunsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode check runs: %w", err)
+		}
+		resp.Body.Close()
+
+		totalCount = result.TotalCount
+		allCheckRuns = append(allCheckRuns, result.CheckRuns...)
+
+		if len(allCheckRuns) >= totalCount || len(result.CheckRuns) < 100 {
+			break
+		}
+	}
+
+	return &CheckRunsResponse{
+		TotalCount: totalCount,
+		CheckRuns:  allCheckRuns,
+	}, nil
+}
+
+// GetCommitStatus fetches the combined commit status for a given SHA.
+// This covers legacy status checks (e.g. older CI systems) that don't use
+// the newer Check Runs API.
+func (c *Client) GetCommitStatus(ctx context.Context, owner, repo, sha string) (*CombinedStatus, error) {
+	var allStatuses []CommitStatus
+	totalCount := 0
+
+	for page := 1; ; page++ {
+		pageURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/status?per_page=100&page=%d", baseURL, owner, repo, sha, page)
+
+		req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		c.setHeaders(req)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		}
+
+		var result CombinedStatus
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode commit status: %w", err)
+		}
+		resp.Body.Close()
+
+		totalCount = result.TotalCount
+		allStatuses = append(allStatuses, result.Statuses...)
+
+		if len(allStatuses) >= totalCount || len(result.Statuses) < 100 {
+			break
+		}
+	}
+
+	return &CombinedStatus{
+		State:      "",
+		TotalCount: totalCount,
+		Statuses:   allStatuses,
+	}, nil
+}
+
+// FetchCommentDetail fetches the comment or review at the given API URL and
+// returns a CommentDetail with author, body preview, type and review state.
+func (c *Client) FetchCommentDetail(ctx context.Context, commentURL string) (*CommentDetail, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", commentURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -331,13 +597,57 @@ func (c *Client) GetCheckRuns(ctx context.Context, owner, repo, sha string) (*Ch
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("fetch comment detail: status %d", resp.StatusCode)
 	}
 
-	var result CheckRunsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode check runs: %w", err)
+	var raw struct {
+		User  User   `json:"user"`
+		Body  string `json:"body"`
+		State string `json:"state"` // reviews only: APPROVED, CHANGES_REQUESTED, COMMENTED, etc.
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode comment detail: %w", err)
 	}
 
-	return &result, nil
+	return &CommentDetail{
+		Author:      raw.User.Login,
+		Body:        truncateBody(raw.Body, 80),
+		Type:        classifyCommentURL(commentURL),
+		ReviewState: strings.ToUpper(raw.State),
+	}, nil
+}
+
+// classifyCommentURL determines the comment type from the API URL pattern.
+func classifyCommentURL(url string) string {
+	switch {
+	case strings.Contains(url, "/pulls/comments/"):
+		return "review_comment"
+	case strings.Contains(url, "/reviews/"):
+		return "review"
+	default:
+		return "comment"
+	}
+}
+
+// truncateBody collapses whitespace and truncates to maxLen characters.
+func truncateBody(s string, maxLen int) string {
+	// Collapse newlines and runs of whitespace into single spaces
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	result := strings.TrimSpace(b.String())
+	if len(result) > maxLen {
+		return result[:maxLen] + "..."
+	}
+	return result
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jpoz/hubell/internal/auth"
+	"github.com/jpoz/hubell/internal/config"
 	"github.com/jpoz/hubell/internal/github"
 	"github.com/jpoz/hubell/internal/notify"
 	"github.com/jpoz/hubell/internal/tui"
@@ -23,6 +25,9 @@ func main() {
 }
 
 func run() error {
+	orgFlag := flag.String("org", "", "GitHub organization to monitor")
+	flag.Parse()
+
 	// Create context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -60,6 +65,15 @@ func run() error {
 		fmt.Println()
 	}
 
+	// Resolve org name: flag > env > config
+	org := *orgFlag
+	if org == "" {
+		org = os.Getenv("HUBELL_ORG")
+	}
+	if org == "" {
+		org = config.LoadOrg()
+	}
+
 	// Create GitHub client
 	client := github.NewClient(token)
 
@@ -69,15 +83,18 @@ func run() error {
 		return fmt.Errorf("failed to get authenticated user: %w", err)
 	}
 
+	// Create progress channel for loading checklist
+	progressCh := make(chan github.LoadingProgress, 8)
+
 	// Create poller with 30-second interval
-	poller := github.NewPoller(client, 30*time.Second, user.Login)
+	poller := github.NewPoller(client, 30*time.Second, user.Login, progressCh)
 	pollCh := poller.Start(ctx)
 
 	// Send test notification on startup
 	notify.SendDesktopNotification("hubell", "Application started successfully!")
 
 	// Create and run TUI
-	model := tui.New(ctx, client, pollCh)
+	model := tui.New(ctx, client, pollCh, progressCh, org)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
