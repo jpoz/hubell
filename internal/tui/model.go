@@ -246,6 +246,8 @@ type Model struct {
 	orgInput           textinput.Model
 	orgInputActive     bool
 	showEngineerDetail bool
+	announcedReadyPRs  map[string]bool // PRs already announced as ready to merge
+	firstPoll          bool             // true until the first poll result is processed
 	engineerDetail     *github.EngineerDetail
 	engineerLoading    bool
 	engineerSelectedPR int
@@ -314,8 +316,10 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 		theme:            theme,
 		themeList:        buildThemeList(),
 		dashboardStats:   dashStats,
-		orgName:          orgName,
-		orgInput:         ti,
+		orgName:           orgName,
+		orgInput:           ti,
+		announcedReadyPRs:  make(map[string]bool),
+		firstPoll:          true,
 	}
 }
 

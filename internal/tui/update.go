@@ -39,6 +39,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		m.dashboardStats.updateFromPollResult(msg.MergedPRs, msg.WeeklyMergedCounts, msg.PRInfos)
+		m.checkReadyToMerge()
 		m.updateNotifications(msg.Notifications)
 		m.updatePRList()
 		m.updateTimelineList()
@@ -364,6 +365,26 @@ func fetchEngineerDetail(ctx context.Context, client *github.Client, org, login 
 		}
 		return EngineerDetailMsg{Detail: detail}
 	}
+}
+
+// checkReadyToMerge announces PRs that are both approved and CI-passing.
+// On the first poll it seeds the set silently so existing ready PRs don't trigger.
+func (m *Model) checkReadyToMerge() {
+	for key, info := range m.prInfos {
+		status := m.prStatuses[key]
+		if status == github.PRStatusSuccess && info.ReviewState == github.PRReviewApproved {
+			if !m.announcedReadyPRs[key] {
+				m.announcedReadyPRs[key] = true
+				if !m.firstPoll {
+					notify.Say(fmt.Sprintf("%s %s PR %d is ready to be merged in", info.Owner, info.Repo, info.Number))
+				}
+			}
+		} else {
+			// Reset if no longer ready so it re-announces if it becomes ready again
+			delete(m.announcedReadyPRs, key)
+		}
+	}
+	m.firstPoll = false
 }
 
 // markAsRead creates a command to mark a notification as read
