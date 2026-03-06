@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/jpoz/hubell/internal/auth"
 	"github.com/jpoz/hubell/internal/config"
 	"github.com/jpoz/hubell/internal/github"
@@ -95,7 +95,7 @@ func run() error {
 
 	// Create and run TUI
 	model := tui.New(ctx, client, pollCh, progressCh, org)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)

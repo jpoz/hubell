@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -107,6 +108,114 @@ func (c *Client) searchAllPages(ctx context.Context, query string) ([]SearchItem
 	return all, nil
 }
 
+// SearchOrgCommits returns a map of login -> commit count for the org since the given date.
+func (c *Client) SearchOrgCommits(ctx context.Context, org string, since time.Time) (map[string]int, error) {
+	sinceStr := since.Format("2006-01-02")
+	q := fmt.Sprintf("org:%s+author-date:>=%s", org, sinceStr)
+
+	counts := make(map[string]int)
+	for page := 1; page <= 10; page++ {
+		u := fmt.Sprintf("%s/search/commits?q=%s&sort=author-date&order=desc&per_page=100&page=%d", baseURL, q, page)
+		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		if err != nil {
+			return nil, err
+		}
+		c.setHeaders(req)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("search commits: status %d", resp.StatusCode)
+		}
+
+		var result struct {
+			TotalCount int `json:"total_count"`
+			Items      []struct {
+				Author *struct {
+					Login string `json:"login"`
+				} `json:"author"`
+			} `json:"items"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("decode commit search: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, item := range result.Items {
+			if item.Author != nil && item.Author.Login != "" {
+				counts[strings.ToLower(item.Author.Login)]++
+			}
+		}
+
+		if len(result.Items) < 100 {
+			break
+		}
+	}
+	return counts, nil
+}
+
+// SearchOrgReviewCounts returns a map of login -> review count for the org since the given date.
+// It searches for PRs reviewed by each member concurrently.
+func (c *Client) SearchOrgReviewCounts(ctx context.Context, org string, members []OrgMember, since time.Time) map[string]int {
+	sinceStr := since.Format("2006-01-02")
+	type result struct {
+		login string
+		count int
+	}
+	ch := make(chan result, len(members))
+	sem := make(chan struct{}, 5)
+	var wg sync.WaitGroup
+
+	for _, m := range members {
+		wg.Add(1)
+		go func(login string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			q := fmt.Sprintf("org:%s+type:pr+reviewed-by:%s+-author:%s+updated:>=%s", org, login, login, sinceStr)
+			u := fmt.Sprintf("%s/search/issues?q=%s&per_page=1", baseURL, q)
+			req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+			if err != nil {
+				return
+			}
+			c.setHeaders(req)
+			resp, err := c.httpClient.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return
+			}
+			var sr struct {
+				TotalCount int `json:"total_count"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+				return
+			}
+			if sr.TotalCount > 0 {
+				ch <- result{login: strings.ToLower(login), count: sr.TotalCount}
+			}
+		}(m.Login)
+	}
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	counts := make(map[string]int)
+	for r := range ch {
+		counts[r.login] = r.count
+	}
+	return counts
+}
+
 // FetchOrgActivity fetches org-wide activity stats for the overview table.
 func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberActivity, error) {
 	since := time.Now().AddDate(0, 0, -7)
@@ -131,7 +240,23 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 		return nil, fmt.Errorf("search open PRs: %w", err)
 	}
 
+	// Fetch commit counts (best-effort, don't fail the whole operation)
+	commitCounts, _ := c.SearchOrgCommits(ctx, org, since)
+	if commitCounts == nil {
+		commitCounts = make(map[string]int)
+	}
+
+	// Fetch review counts (best-effort)
+	reviewCounts := c.SearchOrgReviewCounts(ctx, org, members, since)
+
 	activity := make(map[string]*OrgMemberActivity)
+
+	// Track merged PRs for LOC fetching
+	type prRef struct {
+		owner, repo, login string
+		number             int
+	}
+	var mergedPRRefs []prRef
 
 	for _, item := range mergedItems {
 		login := item.User.Login
@@ -158,6 +283,7 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 			CreatedAt: item.CreatedAt,
 			MergedAt:  mergedAt,
 		})
+		mergedPRRefs = append(mergedPRRefs, prRef{owner: owner, repo: repo, login: login, number: item.Number})
 	}
 
 	for _, item := range openItems {
@@ -182,16 +308,68 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 		})
 	}
 
+	// Fetch LOC for merged PRs concurrently
+	type locResult struct {
+		login     string
+		additions int
+		deletions int
+	}
+	locCh := make(chan locResult, len(mergedPRRefs))
+	sem := make(chan struct{}, 10) // limit concurrency
+	var wg sync.WaitGroup
+	for _, ref := range mergedPRRefs {
+		wg.Add(1)
+		go func(r prRef) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			pr, err := c.GetPullRequest(ctx, r.owner, r.repo, r.number)
+			if err == nil {
+				locCh <- locResult{login: r.login, additions: pr.Additions, deletions: pr.Deletions}
+			}
+		}(ref)
+	}
+	go func() {
+		wg.Wait()
+		close(locCh)
+	}()
+	for lr := range locCh {
+		if a, ok := activity[lr.login]; ok {
+			a.Additions += lr.additions
+			a.Deletions += lr.deletions
+		}
+	}
+
+	// Assign commit and review counts
+	for login, a := range activity {
+		lower := strings.ToLower(login)
+		a.Commits = commitCounts[lower]
+		a.Reviews = reviewCounts[lower]
+	}
+
+	// Ensure members with only reviews also appear
+	for login, count := range reviewCounts {
+		if _, ok := activity[login]; !ok && count > 0 {
+			// Find the original-case login
+			for _, m := range members {
+				if strings.ToLower(m.Login) == login {
+					activity[login] = &OrgMemberActivity{Login: m.Login, Reviews: count}
+					break
+				}
+			}
+		}
+	}
+
 	var result []OrgMemberActivity
 	for _, a := range activity {
-		if len(a.MergedPRs) > 0 || len(a.OpenPRs) > 0 {
+		if len(a.MergedPRs) > 0 || len(a.OpenPRs) > 0 || a.Commits > 0 || a.Reviews > 0 {
 			result = append(result, *a)
 		}
 	}
 
-	// Default sort: most merged PRs first
+	// Default sort: most commits first
 	sort.Slice(result, func(i, j int) bool {
-		return len(result[i].MergedPRs) > len(result[j].MergedPRs)
+		return result[i].Commits > result[j].Commits
 	})
 
 	return result, nil

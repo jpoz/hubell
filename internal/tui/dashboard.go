@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/jpoz/hubell/internal/config"
 	"github.com/jpoz/hubell/internal/github"
 )

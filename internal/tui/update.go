@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"maps"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/jpoz/hubell/internal/browser"
 	"github.com/jpoz/hubell/internal/config"
 	"github.com/jpoz/hubell/internal/github"
@@ -39,6 +39,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		m.dashboardStats.updateFromPollResult(msg.MergedPRs, msg.WeeklyMergedCounts, msg.PRInfos)
+		m.checkReadyToMerge()
 		m.updateNotifications(msg.Notifications)
 		m.updatePRList()
 		m.updateTimelineList()
@@ -93,7 +94,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.orgError = msg.Err
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKeyMsg(msg)
 	}
 
@@ -111,7 +112,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleKeyMsg routes keyboard events to the appropriate handler.
-func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Engineer detail overlay (innermost)
 	if m.showEngineerDetail {
 		return m.handleEngineerDetailKey(msg)
@@ -170,8 +171,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.orgError = nil
 		if m.orgName == "" {
 			m.orgInputActive = true
-			m.orgInput.Focus()
-			return m, m.orgInput.Cursor.BlinkCmd()
+			return m, m.orgInput.Focus()
 		}
 		if len(m.orgMembers) == 0 && !m.orgLoading {
 			m.orgLoading = true
@@ -237,7 +237,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleOrgDashboardKey handles keyboard events in the org dashboard overlay.
-func (m *Model) handleOrgDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleOrgDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Text input mode for org name
 	if m.orgInputActive {
 		switch msg.String() {
@@ -279,7 +279,7 @@ func (m *Model) handleOrgDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "s":
-		m.orgSortColumn = (m.orgSortColumn + 1) % 3
+		m.orgSortColumn = (m.orgSortColumn + 1) % orgSortColumnCount
 		m.sortOrgMembers()
 		m.orgSelectedIndex = 0
 		return m, nil
@@ -308,7 +308,7 @@ func (m *Model) handleOrgDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleEngineerDetailKey handles keyboard events in the engineer detail overlay.
-func (m *Model) handleEngineerDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleEngineerDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":
 		m.showEngineerDetail = false
@@ -364,6 +364,26 @@ func fetchEngineerDetail(ctx context.Context, client *github.Client, org, login 
 		}
 		return EngineerDetailMsg{Detail: detail}
 	}
+}
+
+// checkReadyToMerge announces PRs that are both approved and CI-passing.
+// On the first poll it seeds the set silently so existing ready PRs don't trigger.
+func (m *Model) checkReadyToMerge() {
+	for key, info := range m.prInfos {
+		status := m.prStatuses[key]
+		if status == github.PRStatusSuccess && info.ReviewState == github.PRReviewApproved {
+			if !m.announcedReadyPRs[key] {
+				m.announcedReadyPRs[key] = true
+				if !m.firstPoll {
+					notify.Say(fmt.Sprintf("%s %s PR %d is ready to be merged in", info.Owner, info.Repo, info.Number))
+				}
+			}
+		} else {
+			// Reset if no longer ready so it re-announces if it becomes ready again
+			delete(m.announcedReadyPRs, key)
+		}
+	}
+	m.firstPoll = false
 }
 
 // markAsRead creates a command to mark a notification as read

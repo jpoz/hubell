@@ -5,7 +5,8 @@ import (
 	"math"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/jpoz/hubell/internal/github"
 )
 
@@ -34,29 +35,29 @@ func (m *Model) unfocusedPaneStyle() lipgloss.Style {
 }
 
 // View implements tea.Model
-func (m *Model) View() string {
+func (m *Model) View() tea.View {
 	if m.width == 0 {
-		return "Loading..."
+		return m.newView("Loading...")
 	}
 
 	if m.showEngineerDetail {
-		return m.renderEngineerDetail()
+		return m.newView(m.renderEngineerDetail())
 	}
 
 	if m.showOrgDashboard {
-		return m.renderOrgDashboard()
+		return m.newView(m.renderOrgDashboard())
 	}
 
 	if m.showThemeSelector {
-		return m.renderThemeSelector()
+		return m.newView(m.renderThemeSelector())
 	}
 
 	if m.showDashboard {
-		return m.renderDashboard()
+		return m.newView(m.renderDashboard())
 	}
 
 	if m.loading {
-		return m.renderBanner()
+		return m.newView(m.renderBanner())
 	}
 
 	// Show error banner if present
@@ -118,7 +119,14 @@ func (m *Model) View() string {
 	// Help text
 	help := m.helpStyle().Render(fmt.Sprintf("tab: switch pane | enter: open | r: mark read | f: filter [%s] | d: dashboard | o: org | t: theme | q: quit | /: search", m.filterMode))
 
-	return errorBanner + panes + "\n" + help
+	return m.newView(errorBanner + panes + "\n" + help)
+}
+
+// newView wraps a string in a tea.View with AltScreen enabled.
+func (m *Model) newView(s string) tea.View {
+	v := tea.NewView(s)
+	v.AltScreen = true
+	return v
 }
 
 // renderBanner renders the banner.txt centered in the terminal with a pulsing color

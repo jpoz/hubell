@@ -195,6 +195,10 @@ type OrgMemberActivity struct {
 	Login     string
 	MergedPRs []MergedPRInfo
 	OpenPRs   []MergedPRInfo
+	Commits   int
+	Reviews   int
+	Additions int
+	Deletions int
 }
 
 // EngineerDetail holds the full drill-down data for a single engineer
