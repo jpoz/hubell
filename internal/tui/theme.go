@@ -1,8 +1,10 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
 	"github.com/jpoz/hubell/internal/config"
 )
 
@@ -11,36 +13,36 @@ type Theme struct {
 	Name string
 
 	// UI chrome
-	Error           lipgloss.Color
-	HelpText        lipgloss.Color
-	FocusedBorder   lipgloss.Color
-	UnfocusedBorder lipgloss.Color
+	Error           color.Color
+	HelpText        color.Color
+	FocusedBorder   color.Color
+	UnfocusedBorder color.Color
 
 	// Banner animation endpoints (RGB)
 	BannerDark   [3]int
 	BannerBright [3]int
 
 	// CI / PR status
-	StatusSuccess lipgloss.Color
-	StatusFailure lipgloss.Color
-	StatusPending lipgloss.Color
+	StatusSuccess color.Color
+	StatusFailure color.Color
+	StatusPending color.Color
 
 	// List styling
-	Title              lipgloss.Color
-	TitleBar           lipgloss.Color
-	SelectedForeground lipgloss.Color
-	SelectedDesc       lipgloss.Color
-	NormalForeground   lipgloss.Color
-	NormalDesc         lipgloss.Color
+	Title              color.Color
+	TitleBar           color.Color
+	SelectedForeground color.Color
+	SelectedDesc       color.Color
+	NormalForeground   color.Color
+	NormalDesc         color.Color
 
 	// Timeline event colors
-	TimelineCreated  lipgloss.Color
-	TimelineApproved lipgloss.Color
-	TimelineMerged   lipgloss.Color
+	TimelineCreated  color.Color
+	TimelineApproved color.Color
+	TimelineMerged   color.Color
 
 	// General
-	Accent lipgloss.Color
-	Subtle lipgloss.Color
+	Accent color.Color
+	Subtle color.Color
 }
 
 // Built-in themes keyed by lowercase identifier.

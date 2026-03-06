@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/jpoz/hubell/internal/github"
 )
 
@@ -13,13 +13,23 @@ import (
 type OrgSortColumn int
 
 const (
-	SortByMerged OrgSortColumn = iota
+	SortByCommits OrgSortColumn = iota
+	SortByReviews
+	SortByLOC
+	SortByMerged
 	SortByOpen
 	SortByName
+	orgSortColumnCount
 )
 
 func (s OrgSortColumn) String() string {
 	switch s {
+	case SortByCommits:
+		return "Commits"
+	case SortByReviews:
+		return "Reviews"
+	case SortByLOC:
+		return "LOC"
 	case SortByMerged:
 		return "Merged"
 	case SortByOpen:
@@ -35,6 +45,12 @@ func (s OrgSortColumn) String() string {
 func (m *Model) sortOrgMembers() {
 	sort.Slice(m.orgMembers, func(i, j int) bool {
 		switch m.orgSortColumn {
+		case SortByCommits:
+			return m.orgMembers[i].Commits > m.orgMembers[j].Commits
+		case SortByReviews:
+			return m.orgMembers[i].Reviews > m.orgMembers[j].Reviews
+		case SortByLOC:
+			return (m.orgMembers[i].Additions + m.orgMembers[i].Deletions) > (m.orgMembers[j].Additions + m.orgMembers[j].Deletions)
 		case SortByMerged:
 			return len(m.orgMembers[i].MergedPRs) > len(m.orgMembers[j].MergedPRs)
 		case SortByOpen:
@@ -42,7 +58,7 @@ func (m *Model) sortOrgMembers() {
 		case SortByName:
 			return m.orgMembers[i].Login < m.orgMembers[j].Login
 		default:
-			return len(m.orgMembers[i].MergedPRs) > len(m.orgMembers[j].MergedPRs)
+			return m.orgMembers[i].Commits > m.orgMembers[j].Commits
 		}
 	})
 }
@@ -54,6 +70,16 @@ func totalMergedPRs(members []github.OrgMemberActivity) int {
 		total += len(m.MergedPRs)
 	}
 	return total
+}
+
+// totalOrgStats returns total commits, reviews, and LOC across all org members.
+func totalOrgStats(members []github.OrgMemberActivity) (commits, reviews, loc int) {
+	for _, m := range members {
+		commits += m.Commits
+		reviews += m.Reviews
+		loc += m.Additions + m.Deletions
+	}
+	return
 }
 
 // renderOrgDashboard renders the org activity overlay.
@@ -93,22 +119,31 @@ func (m *Model) renderOrgDashboard() string {
 	} else {
 		// Column headers
 		innerWidth := maxWidth - 6 // padding
-		nameWidth := max(innerWidth-20, 16)
+		nameWidth := max(innerWidth-47, 16)
 
+		headerCommits := "Commits"
+		headerReviews := "Reviews"
+		headerLOC := "LOC"
 		headerMerged := "Merged"
 		headerOpen := "Open"
-		if m.orgSortColumn == SortByMerged {
-			headerMerged = "Merged ▼"
-		} else if m.orgSortColumn == SortByOpen {
-			headerOpen = "Open ▼"
-		}
-
 		nameHeader := "Engineer"
-		if m.orgSortColumn == SortByName {
+
+		switch m.orgSortColumn {
+		case SortByCommits:
+			headerCommits = "Commits ▼"
+		case SortByReviews:
+			headerReviews = "Reviews ▼"
+		case SortByLOC:
+			headerLOC = "LOC ▼"
+		case SortByMerged:
+			headerMerged = "Merged ▼"
+		case SortByOpen:
+			headerOpen = "Open ▼"
+		case SortByName:
 			nameHeader = "Engineer ▼"
 		}
 
-		header := fmt.Sprintf("  %-*s %8s %8s", nameWidth, nameHeader, headerMerged, headerOpen)
+		header := fmt.Sprintf("  %-*s %9s %9s %8s %8s %8s", nameWidth, nameHeader, headerCommits, headerReviews, headerLOC, headerMerged, headerOpen)
 		b.WriteString(accentStyle.Render(header))
 		b.WriteString("\n")
 		b.WriteString(subtleStyle.Render("  " + strings.Repeat("─", innerWidth)))
@@ -134,10 +169,13 @@ func (m *Model) renderOrgDashboard() string {
 				name = name[:nameWidth-1] + "…"
 			}
 
+			commits := member.Commits
+			reviews := member.Reviews
+			loc := member.Additions + member.Deletions
 			merged := len(member.MergedPRs)
 			open := len(member.OpenPRs)
 
-			line := fmt.Sprintf("%-*s %8d %8d", nameWidth, name, merged, open)
+			line := fmt.Sprintf("%-*s %9d %9d %8d %8d %8d", nameWidth, name, commits, reviews, loc, merged, open)
 
 			if i == m.orgSelectedIndex {
 				b.WriteString(selectedStyle.Render("▸ " + line))
@@ -156,8 +194,9 @@ func (m *Model) renderOrgDashboard() string {
 
 		// Summary
 		b.WriteString("\n")
-		summary := fmt.Sprintf("%d engineers active  ·  %d PRs merged this week",
-			len(m.orgMembers), totalMergedPRs(m.orgMembers))
+		totalCommits, totalReviews, totalLOC := totalOrgStats(m.orgMembers)
+		summary := fmt.Sprintf("%d engineers active  ·  %d commits  ·  %d reviews  ·  %d LOC  ·  %d PRs merged",
+			len(m.orgMembers), totalCommits, totalReviews, totalLOC, totalMergedPRs(m.orgMembers))
 		b.WriteString(accentStyle.Render(summary))
 		b.WriteString("\n\n")
 

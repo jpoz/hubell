@@ -2,12 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"io"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -36,7 +37,7 @@ func (d TimelineDelegate) Render(w io.Writer, m list.Model, index int, item list
 
 	// Pick icon and color based on event type
 	var icon, label string
-	var iconColor lipgloss.Color
+	var iconColor color.Color
 	switch evt.EventType {
 	case TimelineEventCreated:
 		icon = "+"

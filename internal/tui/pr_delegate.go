@@ -2,13 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"io"
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/jpoz/hubell/internal/github"
 )
@@ -89,23 +90,23 @@ func (d PRDelegate) Render(w io.Writer, m list.Model, index int, item list.Item)
 		}
 		for i := 0; i < shown; i++ {
 			cr := sorted[i]
-			var color lipgloss.Color
+			var dotColor color.Color
 			var dot string
 			switch {
 			case cr.Status == "queued" || cr.Status == "in_progress":
-				color = d.theme.StatusPending
+				dotColor = d.theme.StatusPending
 				dot = "○"
 			case cr.Conclusion == "success":
-				color = d.theme.StatusSuccess
+				dotColor = d.theme.StatusSuccess
 				dot = "●"
 			case cr.Conclusion == "failure" || cr.Conclusion == "cancelled" || cr.Conclusion == "timed_out":
-				color = d.theme.StatusFailure
+				dotColor = d.theme.StatusFailure
 				dot = "●"
 			default:
-				color = d.theme.Subtle
+				dotColor = d.theme.Subtle
 				dot = "●"
 			}
-			dots.WriteString(lipgloss.NewStyle().Foreground(color).Render(dot))
+			dots.WriteString(lipgloss.NewStyle().Foreground(dotColor).Render(dot))
 		}
 		if overflow > 0 {
 			dots.WriteString(lipgloss.NewStyle().Foreground(d.theme.Subtle).Render(fmt.Sprintf("+%d", overflow)))

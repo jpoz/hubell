@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	"charm.land/lipgloss/v2"
 )
 
 // BarChartData represents a single bar in the chart.
@@ -14,7 +16,7 @@ type BarChartData struct {
 }
 
 // renderBarChart renders a text-based bar chart using block characters.
-func renderBarChart(data []BarChartData, maxWidth, maxHeight int, barColor, labelColor, currentWeekColor lipgloss.Color) string {
+func renderBarChart(data []BarChartData, maxWidth, maxHeight int, barColor, labelColor, currentWeekColor color.Color) string {
 	if len(data) == 0 {
 		return ""
 	}

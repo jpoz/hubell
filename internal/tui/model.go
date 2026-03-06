@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/jpoz/hubell/internal/config"
 	"github.com/jpoz/hubell/internal/github"
 	"github.com/jpoz/hubell/internal/notify"
@@ -293,7 +293,7 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 	ti := textinput.New()
 	ti.Placeholder = "organization name (e.g. angellist)"
 	ti.CharLimit = 100
-	ti.Width = 40
+	ti.SetWidth(40)
 
 	return &Model{
 		list:             l,
@@ -328,7 +328,6 @@ func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		waitForPollResult(m.pollCh),
 		waitForLoadingStep(m.progressCh),
-		tea.EnterAltScreen,
 		bannerTick(),
 	}
 	// Auto-fetch org data for the timeline when an org is configured
