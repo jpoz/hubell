@@ -219,14 +219,14 @@ type Model struct {
 	lastNotifyCount  int
 	filterMode       FilterMode
 	focusedPane      Pane
-	loading      bool
-	loadingSteps map[github.LoadingStep]bool
-	prProgress   github.LoadingProgress
-	progressCh   <-chan github.LoadingProgress
-	bannerFrame  int
-	err          error
-	width        int
-	height       int
+	loading          bool
+	loadingSteps     map[github.LoadingStep]bool
+	prProgress       github.LoadingProgress
+	progressCh       <-chan github.LoadingProgress
+	bannerFrame      int
+	err              error
+	width            int
+	height           int
 
 	theme             Theme
 	showThemeSelector bool
@@ -242,12 +242,16 @@ type Model struct {
 	orgSelectedIndex   int
 	orgSortColumn      OrgSortColumn
 	orgLoading         bool
+	orgProgressCh      <-chan github.OrgLoadingProgress
+	orgLoadStartedAt   time.Time
+	orgLoadProgress    map[github.OrgLoadingStep]github.OrgLoadingProgress
+	orgLastLoadSummary github.OrgActivitySummary
 	orgError           error
 	orgInput           textinput.Model
 	orgInputActive     bool
 	showEngineerDetail bool
 	announcedReadyPRs  map[string]bool // PRs already announced as ready to merge
-	firstPoll          bool             // true until the first poll result is processed
+	firstPoll          bool            // true until the first poll result is processed
 	engineerDetail     *github.EngineerDetail
 	engineerLoading    bool
 	engineerSelectedPR int
@@ -296,30 +300,31 @@ func New(ctx context.Context, client *github.Client, pollCh <-chan github.PollRe
 	ti.SetWidth(40)
 
 	return &Model{
-		list:             l,
-		prList:           pl,
-		timelineList:     tl,
-		githubClient:     client,
-		pollCh:           pollCh,
-		progressCh:       progressCh,
-		ctx:              ctx,
-		cancel:           cancel,
-		allNotifications: make(map[string]*github.Notification),
-		notificationMap:  make(map[string]*github.Notification),
-		prStatuses:       make(map[string]github.PRStatus),
-		prInfos:          make(map[string]github.PRInfo),
-		commentDetails:   make(map[string]*github.CommentDetail),
-		filterMode:       FilterMyPRs,
-		focusedPane:      TimelinePane,
-		loading:          true,
-		loadingSteps:     make(map[github.LoadingStep]bool),
-		theme:            theme,
-		themeList:        buildThemeList(),
-		dashboardStats:   dashStats,
+		list:              l,
+		prList:            pl,
+		timelineList:      tl,
+		githubClient:      client,
+		pollCh:            pollCh,
+		progressCh:        progressCh,
+		ctx:               ctx,
+		cancel:            cancel,
+		allNotifications:  make(map[string]*github.Notification),
+		notificationMap:   make(map[string]*github.Notification),
+		prStatuses:        make(map[string]github.PRStatus),
+		prInfos:           make(map[string]github.PRInfo),
+		commentDetails:    make(map[string]*github.CommentDetail),
+		filterMode:        FilterMyPRs,
+		focusedPane:       TimelinePane,
+		loading:           true,
+		loadingSteps:      make(map[github.LoadingStep]bool),
+		theme:             theme,
+		themeList:         buildThemeList(),
+		dashboardStats:    dashStats,
 		orgName:           orgName,
-		orgInput:           ti,
-		announcedReadyPRs:  make(map[string]bool),
-		firstPoll:          true,
+		orgLoadProgress:   make(map[github.OrgLoadingStep]github.OrgLoadingProgress),
+		orgInput:          ti,
+		announcedReadyPRs: make(map[string]bool),
+		firstPoll:         true,
 	}
 }
 
@@ -332,8 +337,7 @@ func (m *Model) Init() tea.Cmd {
 	}
 	// Auto-fetch org data for the timeline when an org is configured
 	if m.orgName != "" {
-		m.orgLoading = true
-		cmds = append(cmds, fetchOrgData(m.ctx, m.githubClient, m.orgName))
+		cmds = append(cmds, m.beginOrgLoad(false))
 	}
 	return tea.Batch(cmds...)
 }
@@ -346,6 +350,17 @@ func waitForLoadingStep(ch <-chan github.LoadingProgress) tea.Cmd {
 			return nil
 		}
 		return LoadingProgressMsg{p}
+	}
+}
+
+// waitForOrgLoadingStep reads the next org loading progress update from the channel.
+func waitForOrgLoadingStep(ch <-chan github.OrgLoadingProgress) tea.Cmd {
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return OrgLoadingProgressMsg{p}
 	}
 }
 

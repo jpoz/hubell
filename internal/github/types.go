@@ -201,6 +201,65 @@ type OrgMemberActivity struct {
 	Deletions int
 }
 
+// OrgLoadingStep identifies a step in org activity loading.
+type OrgLoadingStep int
+
+const (
+	OrgStepMembers OrgLoadingStep = iota
+	OrgStepMergedPRs
+	OrgStepOpenPRs
+	OrgStepCommits
+	OrgStepReviews
+	OrgStepDiffStats
+	OrgStepAggregate
+)
+
+func (s OrgLoadingStep) String() string {
+	switch s {
+	case OrgStepMembers:
+		return "Members"
+	case OrgStepMergedPRs:
+		return "Merged PRs"
+	case OrgStepOpenPRs:
+		return "Open PRs"
+	case OrgStepCommits:
+		return "Commits"
+	case OrgStepReviews:
+		return "Reviews"
+	case OrgStepDiffStats:
+		return "Diff Stats"
+	case OrgStepAggregate:
+		return "Aggregate"
+	default:
+		return ""
+	}
+}
+
+// OrgLoadingProgress describes in-flight or completed org loading work.
+type OrgLoadingProgress struct {
+	Step      OrgLoadingStep
+	Detail    string
+	Current   int
+	Total     int
+	StartedAt time.Time
+	UpdatedAt time.Time
+	Done      bool
+}
+
+// OrgActivitySummary captures high-level stats from an org activity refresh.
+type OrgActivitySummary struct {
+	Members           int
+	MergedPRs         int
+	OpenPRs           int
+	Commits           int
+	Reviews           int
+	ReviewedEngineers int
+	DiffStatsFetched  int
+	ActiveEngineers   int
+	LOC               int
+	Duration          time.Duration
+}
+
 // EngineerDetail holds the full drill-down data for a single engineer
 type EngineerDetail struct {
 	Login            string
