@@ -219,7 +219,7 @@ func (m *Model) renderOrgDashboard() string {
 		b.WriteString("\n\n")
 
 		// Help
-		b.WriteString(subtleStyle.Render("↑↓: navigate  enter: details  s: sort  r: refresh  esc: close"))
+		b.WriteString(subtleStyle.Render("↑↓: navigate  ←→/s: sort  enter: details  r: refresh  esc: close"))
 	}
 
 	box := lipgloss.NewStyle().

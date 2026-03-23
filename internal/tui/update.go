@@ -287,8 +287,14 @@ func (m *Model) handleOrgDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		}
 		return m, nil
 
-	case "s":
+	case "s", "right", "l":
 		m.orgSortColumn = (m.orgSortColumn + 1) % orgSortColumnCount
+		m.sortOrgMembers()
+		m.orgSelectedIndex = 0
+		return m, nil
+
+	case "left", "h":
+		m.orgSortColumn = (m.orgSortColumn - 1 + orgSortColumnCount) % orgSortColumnCount
 		m.sortOrgMembers()
 		m.orgSelectedIndex = 0
 		return m, nil
