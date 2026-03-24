@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/jpoz/hubell/internal/browser"
@@ -52,6 +53,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prProgress = msg.LoadingProgress
 		return m, waitForLoadingStep(m.progressCh)
 
+	case OrgLoadingProgressMsg:
+		m.orgLoadProgress[msg.Step] = msg.OrgLoadingProgress
+		if m.orgProgressCh != nil {
+			return m, waitForOrgLoadingStep(m.orgProgressCh)
+		}
+		return m, nil
+
 	case BannerTickMsg:
 		if m.loading || m.orgLoading || m.engineerLoading {
 			m.bannerFrame++
@@ -74,7 +82,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OrgDataMsg:
 		m.orgLoading = false
+		m.orgProgressCh = nil
 		m.orgError = nil
+		m.orgLastLoadSummary = msg.Summary
 		m.orgMembers = msg.Members
 		m.orgSelectedIndex = 0
 		m.sortOrgMembers()
@@ -90,6 +100,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OrgErrorMsg:
 		m.orgLoading = false
+		m.orgProgressCh = nil
 		m.engineerLoading = false
 		m.orgError = msg.Err
 		return m, nil
@@ -174,8 +185,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.orgInput.Focus()
 		}
 		if len(m.orgMembers) == 0 && !m.orgLoading {
-			m.orgLoading = true
-			return m, tea.Batch(bannerTick(), fetchOrgData(m.ctx, m.githubClient, m.orgName))
+			return m, m.beginOrgLoad(true)
 		}
 		return m, nil
 
@@ -251,8 +261,7 @@ func (m *Model) handleOrgDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 				m.orgName = val
 				m.orgInputActive = false
 				_ = config.SaveOrg(m.orgName)
-				m.orgLoading = true
-				return m, tea.Batch(bannerTick(), fetchOrgData(m.ctx, m.githubClient, m.orgName))
+				return m, m.beginOrgLoad(true)
 			}
 			return m, nil
 		}
@@ -278,8 +287,14 @@ func (m *Model) handleOrgDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		}
 		return m, nil
 
-	case "s":
+	case "s", "right", "l":
 		m.orgSortColumn = (m.orgSortColumn + 1) % orgSortColumnCount
+		m.sortOrgMembers()
+		m.orgSelectedIndex = 0
+		return m, nil
+
+	case "left", "h":
+		m.orgSortColumn = (m.orgSortColumn - 1 + orgSortColumnCount) % orgSortColumnCount
 		m.sortOrgMembers()
 		m.orgSelectedIndex = 0
 		return m, nil
@@ -297,14 +312,31 @@ func (m *Model) handleOrgDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 
 	case "r":
 		if !m.orgLoading {
-			m.orgLoading = true
-			m.orgError = nil
-			return m, tea.Batch(bannerTick(), fetchOrgData(m.ctx, m.githubClient, m.orgName))
+			return m, m.beginOrgLoad(true)
 		}
 		return m, nil
 	}
 
 	return m, nil
+}
+
+func (m *Model) beginOrgLoad(includeTick bool) tea.Cmd {
+	progressCh := make(chan github.OrgLoadingProgress, 512)
+
+	m.orgLoading = true
+	m.orgError = nil
+	m.orgProgressCh = progressCh
+	m.orgLoadStartedAt = time.Now()
+	m.orgLoadProgress = make(map[github.OrgLoadingStep]github.OrgLoadingProgress)
+
+	cmds := []tea.Cmd{
+		waitForOrgLoadingStep(progressCh),
+		fetchOrgData(m.ctx, m.githubClient, m.orgName, progressCh),
+	}
+	if includeTick {
+		cmds = append([]tea.Cmd{bannerTick()}, cmds...)
+	}
+	return tea.Batch(cmds...)
 }
 
 // handleEngineerDetailKey handles keyboard events in the engineer detail overlay.
@@ -345,13 +377,14 @@ func (m *Model) handleEngineerDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 }
 
 // fetchOrgData creates a command that fetches org activity data.
-func fetchOrgData(ctx context.Context, client *github.Client, org string) tea.Cmd {
+func fetchOrgData(ctx context.Context, client *github.Client, org string, progressCh chan<- github.OrgLoadingProgress) tea.Cmd {
 	return func() tea.Msg {
-		members, err := client.FetchOrgActivity(ctx, org)
+		defer close(progressCh)
+		members, summary, err := client.FetchOrgActivityWithProgress(ctx, org, progressCh)
 		if err != nil {
 			return OrgErrorMsg{Err: err}
 		}
-		return OrgDataMsg{Members: members}
+		return OrgDataMsg{Members: members, Summary: summary}
 	}
 }
 

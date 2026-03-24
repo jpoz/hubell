@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -66,6 +67,42 @@ func (c *Client) SearchOrgMergedPRs(ctx context.Context, org string, since time.
 func (c *Client) SearchOrgOpenPRs(ctx context.Context, org string) ([]SearchItem, error) {
 	q := fmt.Sprintf("org:%s+type:pr+state:open", org)
 	return c.searchAllPages(ctx, q)
+}
+
+func reportOrgLoading(progressCh chan<- OrgLoadingProgress, step OrgLoadingStep, startedAt time.Time, detail string, current, total int, done bool) {
+	if progressCh == nil {
+		return
+	}
+	progressCh <- OrgLoadingProgress{
+		Step:      step,
+		Detail:    detail,
+		Current:   current,
+		Total:     total,
+		StartedAt: startedAt,
+		UpdatedAt: time.Now(),
+		Done:      done,
+	}
+}
+
+func shouldReportOrgProgress(current, total int) bool {
+	if total <= 0 {
+		return current <= 1
+	}
+	if current == 0 || current == 1 || current == total {
+		return true
+	}
+	if total <= 25 {
+		return true
+	}
+	return current%5 == 0
+}
+
+func sumCounts(counts map[string]int) int {
+	total := 0
+	for _, count := range counts {
+		total += count
+	}
+	return total
 }
 
 // searchAllPages performs a paginated search, up to 1000 results (GitHub limit).
@@ -161,7 +198,7 @@ func (c *Client) SearchOrgCommits(ctx context.Context, org string, since time.Ti
 
 // SearchOrgReviewCounts returns a map of login -> review count for the org since the given date.
 // It searches for PRs reviewed by each member concurrently.
-func (c *Client) SearchOrgReviewCounts(ctx context.Context, org string, members []OrgMember, since time.Time) map[string]int {
+func (c *Client) SearchOrgReviewCounts(ctx context.Context, org string, members []OrgMember, since time.Time, progress func(current, total int)) map[string]int {
 	sinceStr := since.Format("2006-01-02")
 	type result struct {
 		login string
@@ -170,11 +207,21 @@ func (c *Client) SearchOrgReviewCounts(ctx context.Context, org string, members 
 	ch := make(chan result, len(members))
 	sem := make(chan struct{}, 5)
 	var wg sync.WaitGroup
+	var doneCount int32
 
 	for _, m := range members {
 		wg.Add(1)
 		go func(login string) {
 			defer wg.Done()
+			defer func() {
+				if progress == nil {
+					return
+				}
+				current := int(atomic.AddInt32(&doneCount, 1))
+				if shouldReportOrgProgress(current, len(members)) {
+					progress(current, len(members))
+				}
+			}()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
@@ -218,36 +265,66 @@ func (c *Client) SearchOrgReviewCounts(ctx context.Context, org string, members 
 
 // FetchOrgActivity fetches org-wide activity stats for the overview table.
 func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberActivity, error) {
-	since := time.Now().AddDate(0, 0, -7)
+	members, _, err := c.FetchOrgActivityWithProgress(ctx, org, nil)
+	return members, err
+}
 
+// FetchOrgActivityWithProgress fetches org-wide activity stats and reports loading progress.
+func (c *Client) FetchOrgActivityWithProgress(ctx context.Context, org string, progressCh chan<- OrgLoadingProgress) ([]OrgMemberActivity, OrgActivitySummary, error) {
+	overallStart := time.Now()
+	since := time.Now().AddDate(0, 0, -7)
+	summary := OrgActivitySummary{}
+
+	membersStartedAt := time.Now()
+	reportOrgLoading(progressCh, OrgStepMembers, membersStartedAt, "Listing organization members", 0, 0, false)
 	members, err := c.ListOrgMembers(ctx, org)
 	if err != nil {
-		return nil, fmt.Errorf("list members: %w", err)
+		return nil, summary, fmt.Errorf("list members: %w", err)
 	}
+	summary.Members = len(members)
+	reportOrgLoading(progressCh, OrgStepMembers, membersStartedAt, fmt.Sprintf("%d members found", len(members)), len(members), len(members), true)
 
-	memberSet := make(map[string]bool, len(members))
-	for _, m := range members {
-		memberSet[strings.ToLower(m.Login)] = true
-	}
-
+	mergedStartedAt := time.Now()
+	reportOrgLoading(progressCh, OrgStepMergedPRs, mergedStartedAt, "Searching merged pull requests from the last 7 days", 0, 0, false)
 	mergedItems, err := c.SearchOrgMergedPRs(ctx, org, since)
 	if err != nil {
-		return nil, fmt.Errorf("search merged PRs: %w", err)
+		return nil, summary, fmt.Errorf("search merged PRs: %w", err)
 	}
+	summary.MergedPRs = len(mergedItems)
+	reportOrgLoading(progressCh, OrgStepMergedPRs, mergedStartedAt, fmt.Sprintf("%d merged PRs found", len(mergedItems)), len(mergedItems), len(mergedItems), true)
 
+	openStartedAt := time.Now()
+	reportOrgLoading(progressCh, OrgStepOpenPRs, openStartedAt, "Searching open pull requests", 0, 0, false)
 	openItems, err := c.SearchOrgOpenPRs(ctx, org)
 	if err != nil {
-		return nil, fmt.Errorf("search open PRs: %w", err)
+		return nil, summary, fmt.Errorf("search open PRs: %w", err)
 	}
+	summary.OpenPRs = len(openItems)
+	reportOrgLoading(progressCh, OrgStepOpenPRs, openStartedAt, fmt.Sprintf("%d open PRs found", len(openItems)), len(openItems), len(openItems), true)
 
 	// Fetch commit counts (best-effort, don't fail the whole operation)
-	commitCounts, _ := c.SearchOrgCommits(ctx, org, since)
+	commitsStartedAt := time.Now()
+	reportOrgLoading(progressCh, OrgStepCommits, commitsStartedAt, "Counting authored commits", 0, 0, false)
+	commitCounts, commitErr := c.SearchOrgCommits(ctx, org, since)
 	if commitCounts == nil {
 		commitCounts = make(map[string]int)
 	}
+	summary.Commits = sumCounts(commitCounts)
+	commitDetail := fmt.Sprintf("%d commits attributed", summary.Commits)
+	if commitErr != nil {
+		commitDetail = "Commit counts unavailable"
+	}
+	reportOrgLoading(progressCh, OrgStepCommits, commitsStartedAt, commitDetail, summary.Commits, summary.Commits, true)
 
 	// Fetch review counts (best-effort)
-	reviewCounts := c.SearchOrgReviewCounts(ctx, org, members, since)
+	reviewsStartedAt := time.Now()
+	reportOrgLoading(progressCh, OrgStepReviews, reviewsStartedAt, fmt.Sprintf("Checking review activity across %d engineers", len(members)), 0, len(members), false)
+	reviewCounts := c.SearchOrgReviewCounts(ctx, org, members, since, func(current, total int) {
+		reportOrgLoading(progressCh, OrgStepReviews, reviewsStartedAt, fmt.Sprintf("Checked %d/%d engineers", current, total), current, total, false)
+	})
+	summary.Reviews = sumCounts(reviewCounts)
+	summary.ReviewedEngineers = len(reviewCounts)
+	reportOrgLoading(progressCh, OrgStepReviews, reviewsStartedAt, fmt.Sprintf("%d reviews across %d engineers", summary.Reviews, summary.ReviewedEngineers), len(members), len(members), true)
 
 	activity := make(map[string]*OrgMemberActivity)
 
@@ -309,6 +386,8 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 	}
 
 	// Fetch LOC for merged PRs concurrently
+	diffStatsStartedAt := time.Now()
+	reportOrgLoading(progressCh, OrgStepDiffStats, diffStatsStartedAt, fmt.Sprintf("Fetching diff stats for %d merged PRs", len(mergedPRRefs)), 0, len(mergedPRRefs), false)
 	type locResult struct {
 		login     string
 		additions int
@@ -317,10 +396,17 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 	locCh := make(chan locResult, len(mergedPRRefs))
 	sem := make(chan struct{}, 10) // limit concurrency
 	var wg sync.WaitGroup
+	var locDoneCount int32
 	for _, ref := range mergedPRRefs {
 		wg.Add(1)
 		go func(r prRef) {
 			defer wg.Done()
+			defer func() {
+				current := int(atomic.AddInt32(&locDoneCount, 1))
+				if shouldReportOrgProgress(current, len(mergedPRRefs)) {
+					reportOrgLoading(progressCh, OrgStepDiffStats, diffStatsStartedAt, fmt.Sprintf("Fetched %d/%d PR diffs", current, len(mergedPRRefs)), current, len(mergedPRRefs), false)
+				}
+			}()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			pr, err := c.GetPullRequest(ctx, r.owner, r.repo, r.number)
@@ -333,14 +419,24 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 		wg.Wait()
 		close(locCh)
 	}()
+	fetchedDiffStats := 0
 	for lr := range locCh {
 		if a, ok := activity[lr.login]; ok {
 			a.Additions += lr.additions
 			a.Deletions += lr.deletions
 		}
+		fetchedDiffStats++
 	}
+	summary.DiffStatsFetched = fetchedDiffStats
+	diffDetail := fmt.Sprintf("Diff stats fetched for %d/%d merged PRs", fetchedDiffStats, len(mergedPRRefs))
+	if len(mergedPRRefs) == 0 {
+		diffDetail = "No merged PR diffs to inspect"
+	}
+	reportOrgLoading(progressCh, OrgStepDiffStats, diffStatsStartedAt, diffDetail, len(mergedPRRefs), len(mergedPRRefs), true)
 
 	// Assign commit and review counts
+	aggregateStartedAt := time.Now()
+	reportOrgLoading(progressCh, OrgStepAggregate, aggregateStartedAt, "Ranking active engineers", 0, 0, false)
 	for login, a := range activity {
 		lower := strings.ToLower(login)
 		a.Commits = commitCounts[lower]
@@ -361,9 +457,11 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 	}
 
 	var result []OrgMemberActivity
+	totalLOC := 0
 	for _, a := range activity {
 		if len(a.MergedPRs) > 0 || len(a.OpenPRs) > 0 || a.Commits > 0 || a.Reviews > 0 {
 			result = append(result, *a)
+			totalLOC += a.Additions + a.Deletions
 		}
 	}
 
@@ -372,7 +470,12 @@ func (c *Client) FetchOrgActivity(ctx context.Context, org string) ([]OrgMemberA
 		return result[i].Commits > result[j].Commits
 	})
 
-	return result, nil
+	summary.ActiveEngineers = len(result)
+	summary.LOC = totalLOC
+	summary.Duration = time.Since(overallStart)
+	reportOrgLoading(progressCh, OrgStepAggregate, aggregateStartedAt, fmt.Sprintf("%d active engineers ranked", len(result)), len(result), len(result), true)
+
+	return result, summary, nil
 }
 
 // FetchEngineerDetail fetches detailed activity for a single engineer.

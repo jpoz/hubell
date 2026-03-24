@@ -43,9 +43,15 @@ type LoadingProgressMsg struct {
 	github.LoadingProgress
 }
 
+// OrgLoadingProgressMsg relays org activity loading progress updates.
+type OrgLoadingProgressMsg struct {
+	github.OrgLoadingProgress
+}
+
 // OrgDataMsg delivers org overview data to the TUI
 type OrgDataMsg struct {
 	Members []github.OrgMemberActivity
+	Summary github.OrgActivitySummary
 }
 
 // EngineerDetailMsg delivers drill-down data for a single engineer
